@@ -308,7 +308,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         # update firewall agent if we have addded or updated ports
         if self.updated_ports or added_ports:
-            self.sg_agent.setup_port_filters(DvsNeutronAgent._to_list_of_neutron_ports(added_ports), self.updated_ports)
+            #self.sg_agent.setup_port_filters(DvsNeutronAgent._to_list_of_neutron_ports(added_ports), self.updated_ports)
 
         # clear updated ports
         self.updated_ports.clear()
