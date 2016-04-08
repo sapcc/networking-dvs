@@ -21,11 +21,12 @@ import signal
 import time
 
 import eventlet
+
 eventlet.monkey_patch()
 
 from oslo_config import cfg
 from oslo_log import log as logging
-from neutron.i18n import _LI,_LW
+from neutron.i18n import _LI, _LW
 import oslo_messaging
 from oslo_service import loopingcall
 
@@ -48,11 +49,7 @@ LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
 
-
-
-
 class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
-
     target = oslo_messaging.Target(version='1.4')
 
     def __init__(self,
@@ -60,7 +57,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                  quitting_rpc_timeout=None,
                  conf=None,
                  dvs_monitor_respawn_interval=(
-                    dvs_constants.DEFAULT_DVS_RESPAWN)):
+                         dvs_constants.DEFAULT_DVS_RESPAWN)):
 
         super(DvsNeutronAgent, self).__init__()
 
@@ -71,32 +68,30 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         self.security_conf = self.conf.get('SECURITYGROUP', {})
 
         self.dvs_name = self.dvs_config.ml2_vmware.dv_switch
-        self.portgroup_name =  self.dvs_config.ml2_vmware.dv_portgroup
-        self.default_vlan =  self.dvs_config.ml2_vmware.dv_default_vlan
+        self.portgroup_name = self.dvs_config.ml2_vmware.dv_portgroup
+        self.default_vlan = self.dvs_config.ml2_vmware.dv_default_vlan
 
         LOG.info(_LI("Using switch {} and portgroup {}".format(self.dvs_name, self.portgroup_name)))
 
         self.dvs_monitor_respawn_interval = dvs_monitor_respawn_interval
-        self.minimize_polling=minimize_polling,
-        self.polling_interval=10
+        self.minimize_polling = minimize_polling,
+        self.polling_interval = 10
         self.iter_num = 0
         self.run_daemon_loop = True
         self.quitting_rpc_timeout = quitting_rpc_timeout
         self.catch_sigterm = False
         self.catch_sighup = False
 
-                # Stores port update notifications for processing in main rpc loop
+        # Stores port update notifications for processing in main rpc loop
         self.updated_ports = set()
         # Stores port delete notifications
         self.deleted_ports = set()
 
         self.network_ports = collections.defaultdict(set)
 
-
         self.enable_security_groups = self.security_conf.get('enable_security_group', False)
 
         self.local_vlan_map = {}
-
 
         host = self.conf.host
         self.agent_id = 'dvs-agent-%s' % host
@@ -106,26 +101,22 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Security group agent support
         if self.enable_security_groups:
             self.sg_agent = sg_rpc.SecurityGroupAgentRpc(self.context,
-                    self.sg_plugin_rpc, self.local_vlan_map,
-                    defer_refresh_firewall=True)
+                                                         self.sg_plugin_rpc, self.local_vlan_map,
+                                                         defer_refresh_firewall=True)
 
         self.agent_state = {
-        'binary': 'neutron-dvs-agent',
-        'host': host,
-        'topic': n_const.L2_AGENT_TOPIC,
-        'configurations': {},
-        'agent_type': dvs_constants.DVS_AGENT_TYPE,
-        'start_flag': True}
+            'binary': 'neutron-dvs-agent',
+            'host': host,
+            'topic': n_const.L2_AGENT_TOPIC,
+            'configurations': {},
+            'agent_type': dvs_constants.DVS_AGENT_TYPE,
+            'start_flag': True}
 
         self.api = vmware_util.VMWareUtil()
 
-
         self.connection.consume_in_threads()
 
-
-
-
-    def port_update(self, context,  **kwargs):
+    def port_update(self, context, **kwargs):
         port = kwargs.get('port')
         self.updated_ports.add(port['id'])
 
@@ -166,7 +157,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 port_set.remove(port_id)
                 break
 
-
     def setup_rpc(self):
 
         LOG.info(_LI("RPC agent_id: %s"), self.agent_id)
@@ -191,14 +181,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                                      consumers,
                                                      start_listening=False)
 
-
-        report_interval = 30 #self.conf.AGENT.report_interval
+        report_interval = 30  # self.conf.AGENT.report_interval
         heartbeat = loopingcall.FixedIntervalLoopingCall(self._report_state)
         heartbeat.start(interval=report_interval)
 
     def _report_state(self):
         LOG.info(_LI("******** Reporting state via rpc"))
-
 
         try:
             self.state_rpc.report_state(self.context,
@@ -236,7 +224,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _to_list_of_neutron_ports(ports):
         neutron_ports = set()
 
-        for mac,port in ports.iteritems():
+        for mac, port in ports.iteritems():
             neutron_ports.add(port['neutron_info']['port_id'])
 
         return neutron_ports
@@ -248,28 +236,29 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     @staticmethod
     def _unbound_ports(ports):
-       unbound_ports = {}
+        unbound_ports = {}
 
-       for mac,port in ports.iteritems():
+        for mac, port in ports.iteritems():
             if "neutron_info" in port and port["connected_vlan"] != port['neutron_info']['segmentation_id']:
                 unbound_ports[mac] = port
 
-       return unbound_ports
+        return unbound_ports
 
     def _scan_ports(self):
         start = time.clock()
 
         ports = self.api.get_connected_ports_on_dvpg()
 
-        LOG.info(_LI("Vcenter integration bridge {} scan completed in {} seconds".format(self.portgroup_name,time.clock()-start)))
+        LOG.info(_LI("Vcenter integration bridge {} scan completed in {} seconds".format(self.portgroup_name,
+                                                                                         time.clock() - start)))
 
         macs = []
         for mac, port_info in ports.iteritems():
             if port_info["connected_vlan"] == self.default_vlan:
                 macs.append(mac)
 
-
-        neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id, host=cfg.CONF.host)
+        neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
+                                                                 host=cfg.CONF.host)
 
         LOG.info("********")
         LOG.info(neutron_ports)
@@ -278,21 +267,20 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             if neutron_info and "mac_address" in neutron_info and ports[neutron_info["mac_address"]] is not None:
                 ports[neutron_info["mac_address"]]["neutron_info"] = neutron_info
 
-
-        LOG.info(_LI("Scan ports completed in {} seconds".format(time.clock()-start)))
+        LOG.info(_LI("Scan ports completed in {} seconds".format(time.clock() - start)))
 
         return ports
-
 
     def _bind_ports(self, added_ports):
 
         devices_up = []
         devices_down = []
 
-        for mac,port in added_ports.iteritems():
+        for mac, port in added_ports.iteritems():
             if port["connected_vlan"] != port['neutron_info']['segmentation_id']:
 
-                LOG.info("Preparing to bind port {} to VLAN {}".format(port['neutron_info']['port_id'],port['neutron_info']['segmentation_id']))
+                LOG.info("Preparing to bind port {} to VLAN {}".format(port['neutron_info']['port_id'],
+                                                                       port['neutron_info']['segmentation_id']))
 
                 try:
                     self.api.bind_port(port)
@@ -300,9 +288,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 except Exception:
                     devices_down.append(port['neutron_info']['port_id'])
 
-        LOG.info("Updating ports up {} down {} agent {} host {}".format(devices_up,devices_down, self.agent_id,cfg.CONF.host))
+        LOG.info("Updating ports up {} down {} agent {} host {}".format(devices_up, devices_down, self.agent_id,
+                                                                        cfg.CONF.host))
 
-        result = self.plugin_rpc.update_device_list(self.context, devices_up, devices_down, self.agent_id,cfg.CONF.host)
+        result = self.plugin_rpc.update_device_list(self.context, devices_up, devices_down, self.agent_id,
+                                                    cfg.CONF.host)
 
         LOG.info("Updated ports result".format(result))
 
@@ -313,7 +303,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         # clear updated ports
         self.updated_ports.clear()
-
 
     def _unbind_ports(self, ports):
         # Nothing really to do on the VCenter - we let the vcenter unplug - so all we need to do is
@@ -348,18 +337,18 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             port_stats = {}
             try:
 
-
                 # Get current ports known on the VMWare intergration bridge
                 ports = self._scan_ports()
 
                 added_ports = DvsNeutronAgent._unbound_ports(ports)
 
-                port_stats = {"added":len(added_ports), "updated":len(self.updated_ports), "deleted":len(self.deleted_ports)}
+                port_stats = {"added": len(added_ports), "updated": len(self.updated_ports),
+                              "deleted": len(self.deleted_ports)}
 
                 self._bind_ports(added_ports)
 
                 # Remove deleted ports
-                #TODO : updated/deleted ports can be updated via the callback
+                # TODO : updated/deleted ports can be updated via the callback
 
                 self._unbind_ports(self.deleted_ports)
 
@@ -367,7 +356,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 LOG.exception(_LE("Error while processing ports"))
 
             polling_manager.polling_completed()
-            self.loop_count_and_wait(start,port_stats)
+            self.loop_count_and_wait(start, port_stats)
 
     def daemon_loop(self):
         # Start everything.
@@ -376,7 +365,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         if hasattr(signal, 'SIGHUP'):
             signal.signal(signal.SIGHUP, self._handle_sighup)
         with polling.get_polling_manager(
-            self.minimize_polling,
-            self.dvs_monitor_respawn_interval) as pm:
-
+                self.minimize_polling,
+                self.dvs_monitor_respawn_interval) as pm:
             self.rpc_loop(polling_manager=pm)
