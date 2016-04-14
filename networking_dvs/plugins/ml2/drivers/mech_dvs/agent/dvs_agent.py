@@ -30,7 +30,7 @@ from neutron.i18n import _LI, _LW
 import oslo_messaging
 from oslo_service import loopingcall
 
-from neutron.agent.common import polling
+
 from neutron.common import config
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
