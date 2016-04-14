@@ -26,18 +26,17 @@ eventlet.monkey_patch()
 
 from oslo_config import cfg
 from oslo_log import log as logging
-from neutron.i18n import _LI, _LW
 import oslo_messaging
 from oslo_service import loopingcall
-
 
 from neutron import context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
 from neutron.common import topics, config, constants as n_const
-from neutron.i18n import _LE
+from neutron.i18n import _LI, _LW, _LE
 
 from networking_dvs.plugins.ml2.drivers.mech_dvs import config as dvs_config, constants as dvs_constants
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import dvs_firewall, vmware_util
+from networking_dvs.common import config as m_config
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
