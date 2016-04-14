@@ -12,7 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import re
 import time
 import atexit
 
@@ -22,10 +21,10 @@ from oslo_vmware import vim_util
 
 from neutron.i18n import _LI, _LW
 from oslo_log import log
-from networking_dvs.plugins.ml2.drivers.mech_dvs import config
+from networking_dvs.common import config
 
-LOG = log.getLogger(__name__)
 CONF = config.CONF
+LOG = log.getLogger(__name__)
 
 
 class ResourceNotFoundException(exceptions.VimException):
@@ -43,40 +42,33 @@ def _get_object_by_type(results, type_value):
             if obj._type == type_value]
 
 
-
 class VMWareUtil():
-    def __init__(self):
+    def __init__(self, config=None):
+        config = config or CONF.ML2_VMWARE
         self._session = None
-        self._create_session()
+        self._create_session(config)
 
-        self.dvs_name = CONF.ml2_vmware.dv_switch
-        self.portgroup_name = CONF.ml2_vmware.dv_portgroup
-        self.default_vlan = CONF.ml2_vmware.dv_default_vlan
+        self.dvs_name = config.dv_switch
+        self.portgroup_name = config.dv_portgroup
+        self.default_vlan = config.dv_default_vlan
+        LOG.info(_LI("Using switch {} and portgroup {}".format(self.dvs_name, self.portgroup_name)))
 
         self.dvs_ref = self.get_dvs(self.dvs_name)
         self.dvpg = self.get_dvpg_by_name(self.portgroup_name)
         self.dvpg_key = self.dvpg.value
 
-    def _create_session(self):
+    def _create_session(self, config):
         """Create Vcenter Session for API Calling."""
-        host_ip = CONF.ml2_vmware.host_ip
-        host_username = CONF.ml2_vmware.host_username
-        host_password = CONF.ml2_vmware.host_password
-        wsdl_location = CONF.ml2_vmware.wsdl_location
-        task_poll_interval = CONF.ml2_vmware.task_poll_interval
-        api_retry_count = CONF.ml2_vmware.api_retry_count
-
         self._session = vmwareapi.VMwareAPISession(
-            host_ip,
-            host_username,
-            host_password,
-            api_retry_count,
-            task_poll_interval,
+            config.vsphere_hostname,
+            config.vsphere_login,
+            config.vsphere_password,
+            config.api_retry_count,
+            config.task_poll_interval,
             create_session=True,
-            wsdl_loc=wsdl_location)
+            wsdl_loc=config.wsdl_location)
 
         atexit.register(self._session.logout)
-
     def get_datacenter(self):
         """Get the datacenter reference."""
         results = self._session.invoke_api(
@@ -115,7 +107,7 @@ class VMWareUtil():
             raise ResourceNotFoundException(_("Distributed Virtual Switch "
                                               "%s not found!") % dvs_name)
         else:
-            LOG.info(_LI("Got distriubted virtual switch by name %s."),
+            LOG.info(_LI("Got distributed virtual switch by name %s."),
                      dvs_name)
 
         return dvs_ref
@@ -142,7 +134,7 @@ class VMWareUtil():
             LOG.warning(_LW("Distributed Port Group %s not found!"),
                         dvpg_name)
         else:
-            LOG.info(_LI("Got distriubted port group by name %s."),
+            LOG.info(_LI("Got distributed port group by name %s."),
                      dvpg_name)
 
         return dvpg_ref
@@ -150,15 +142,15 @@ class VMWareUtil():
     def bind_port(self, port_info):
         specs = []
 
-        if port_info["neutron_info"]["network_type"] == "vlan" :
+        if port_info["neutron_info"]["network_type"] == "vlan":
             specs.append(self.get_vlan_port_config_spec(port_info))
         else:
-            LOG.info("Cannot configure port %s it is not of type vlan",port_info["neutron_info"]["port_id"])
+            LOG.info("Cannot configure port %s it is not of type vlan", port_info["neutron_info"]["port_id"])
 
         if specs:
             self._session.invoke_api(self._session.vim,
-                                                     "ReconfigureDVPort_Task",
-                                                     self.dvs_ref, port=specs)
+                                     "ReconfigureDVPort_Task",
+                                     self.dvs_ref, port=specs)
 
     def get_empty_port_config_spec(self, port):
         client_factory = self._session.vim.client.factory
@@ -175,7 +167,8 @@ class VMWareUtil():
         config_spec = client_factory.create('ns0:DVPortConfigSpec')
         config_spec.key = port_info["vmware_port"]
         config_spec.name = port_info["neutron_info"]["port_id"]
-        config_spec.description = "Neutron port {} for network {}".format(port_info["neutron_info"]["port_id"],port_info["neutron_info"]["network_id"])
+        config_spec.description = "Neutron port {} for network {}".format(port_info["neutron_info"]["port_id"],
+                                                                          port_info["neutron_info"]["network_id"])
         config_spec.operation = "edit"
         setting = client_factory.create('ns0:VMwareDVSPortSetting')
         vlan_setting = client_factory.create('ns0:VmwareDistributedVirtualSwitchVlanIdSpec')
@@ -186,68 +179,74 @@ class VMWareUtil():
 
         return config_spec
 
-    def get_connected_ports_on_dvpg(self,default_vlan_only = True):
+    def get_connected_ports_on_dvpg(self, default_vlan_only=True):
+        start = time.clock()
 
         client_factory = self._session.vim.client.factory
         criteria = client_factory.create('ns0:DistributedVirtualSwitchPortCriteria')
         criteria.portgroupKey = self.dvpg_key
         criteria.inside = True
 
-        start = time.time()
+        start = time.clock()
         ports = self._session.invoke_api(self._session.vim,
-                                              "FetchDVPorts",
-                                              self.dvs_ref, criteria=criteria)
+                                         "FetchDVPorts",
+                                         self.dvs_ref, criteria=criteria)
 
-        LOG.info("Fetch ports in {}".format(time.time()-start))
+        LOG.info("Fetch {} ports in {}".format(len(ports), time.clock() - start))
 
         port_info = {}
         reset_port_info_specs = []
-        for p in ports:
 
+        for p in ports:
+            connected_vlan = None
             mac = None
-            if hasattr(p,"config") and hasattr(p.config,"setting") and hasattr(p.config.setting,"vlan") and p.config.setting.vlan.vlanId:
+            if hasattr(p, "config") \
+                    and hasattr(p.config, "setting") \
+                    and hasattr(p.config.setting, "vlan") \
+                    and p.config.setting.vlan.vlanId:
+
                 connected_vlan = p.config.setting.vlan.vlanId
 
                 if connected_vlan == self.default_vlan:
-                    if hasattr( p.config, "name") and p.config.name:
-                        LOG.info("Adding reset port spec for {} {}".format(p.config.name,p.config.name==""))
+                    if hasattr(p.config, "name") and p.config.name:
+                        LOG.info("Adding reset port spec for {} {}".format(p.config.name, p.config.name == ""))
                         reset_port_info_specs.append(self.get_empty_port_config_spec(p))
-
-                if default_vlan_only and not connected_vlan == self.default_vlan:
+                elif default_vlan_only:
                     # We do this to optimistically assume anything with a VLAN not the default has been bound already
                     # This saves a significant overhead (2-3 secs per port) to get the mac address from the VM
                     continue
 
-            if hasattr(p,"state") and hasattr(p.state,"runtimeInfo") and hasattr(p.state.runtimeInfo, "macAddress") and p.state.runtimeInfo.macAddress and p.state.runtimeInfo.macAddress != "00:00:00:00:00:00":
+            if hasattr(p, "state") \
+                    and hasattr(p.state, "runtimeInfo") \
+                    and hasattr(p.state.runtimeInfo, "macAddress") \
+                    and p.state.runtimeInfo.macAddress \
+                    and p.state.runtimeInfo.macAddress != "00:00:00:00:00:00":
                 # If we have the MAC on the runtime state we don't need to go to the VM
                 mac = p.state.runtimeInfo.macAddress
-
-            elif hasattr(p,"connectee") and p.connectee is not None and p.connectee.connectedEntity._type == 'VirtualMachine':
+            elif hasattr(p, "connectee") \
+                    and p.connectee is not None \
+                    and p.connectee.connectedEntity._type == 'VirtualMachine':
                 # So unfortunately we have an expensive call to get the VM to determine the MAC
-                mac = self.get_vm_mac(p.connectee.connectedEntity.value,p.connectee.nicKey)
+                mac = self.get_vm_mac(p.connectee.connectedEntity.value, p.connectee.nicKey)
 
             if mac is not None:
-                port_info[mac] = {"vmware_port":p.key,"connected_vlan":connected_vlan}
-
+                port_info[mac] = {"vmware_port": p.key, "connected_vlan": connected_vlan}
 
         if reset_port_info_specs:
             self._session.invoke_api(self._session.vim,
-                                    "ReconfigureDVPort_Task",
+                                     "ReconfigureDVPort_Task",
                                      self.dvs_ref, port=reset_port_info_specs)
 
+        LOG.info(_LI("Vcenter integration bridge {} scan completed in {} seconds".format(self.portgroup_name,
+                                                                                         time.clock() - start)))
         return port_info
 
+    def get_vm_mac(self, vm_name, nic_key):
+        start = time.clock()
 
+        vm_props = self.get_vm_properties(vm_name, ["name", "config.hardware"])
 
-
-
-    def get_vm_mac(self,vm_name,nic_key):
-        start = time.time()
-
-
-        vm_props = self.get_vm_properties(vm_name,["name", "config.hardware"])
-
-        LOG.info("get_vm_properties in {}".format(time.time()-start))
+        LOG.info("get_vm_properties in {}".format(time.clock() - start))
 
         mac = None
         if vm_props:
@@ -257,37 +256,37 @@ class VMWareUtil():
                         if str(device.key) == nic_key:
                             mac = device.macAddress
 
-        LOG.info("Get VM mac in {}".format(time.time()-start))
+        LOG.info("Get VM mac in {}".format(time.clock() - start))
 
         return mac
 
     def get_vm_ref(self, vm_key):
-       vms = self._session.invoke_api(vim_util, "get_objects",self._session.vim,
-            "VirtualMachine", 50,["name"])
-       return self._get_object_from_results(vms, vm_key,self._get_ref_for_value)
+        vms = self._session.invoke_api(vim_util, "get_objects", self._session.vim,
+                                       "VirtualMachine", 50, ["name"])
+        return self._get_object_from_results(vms, vm_key, self._get_ref_for_value)
 
-       return vm
+        return vm
 
-    def get_vm_properties(self, vm_key,properties):
-       vms = self._session.invoke_api(vim_util, "get_objects",self._session.vim,
-             "VirtualMachine", 50,properties)
-       return self._get_object_from_results(vms, vm_key,self._get_propset_for_value)
+    def get_vm_properties(self, vm_key, properties):
+        vms = self._session.invoke_api(vim_util, "get_objects", self._session.vim,
+                                       "VirtualMachine", 50, properties)
+        return self._get_object_from_results(vms, vm_key, self._get_propset_for_value)
 
     def _get_object_from_results(self, results, value, func):
         while results:
             object = func(results, value)
             if object:
-               self._session.invoke_api(vim_util, 'cancel_retrieval',self._session.vim,results)
+                self._session.invoke_api(vim_util, 'cancel_retrieval', self._session.vim, results)
 
-               return object
-            results = self._session.invoke_api(vim_util, 'continue_retrieval',self._session.vim,results)
+                return object
+            results = self._session.invoke_api(vim_util, 'continue_retrieval', self._session.vim, results)
 
-    def _get_ref_for_value(self,results, value):
+    def _get_ref_for_value(self, results, value):
         for object in results.objects:
             if object.obj.value == value:
                 return object.obj
 
-    def _get_propset_for_value(self,results, value):
+    def _get_propset_for_value(self, results, value):
         for object in results.objects:
             if object.obj.value == value:
                 return object.propSet

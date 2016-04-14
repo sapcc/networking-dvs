@@ -14,7 +14,7 @@
 #    under the License.
 VMWARE_HYPERVISOR_TYPE = 'VMware vCenter Server'
 DVS = 'dvs'
-AGENT_TYPE_DVS = 'DVS agent'
+AGENT_TYPE_DVS = 'DVS Agent'
 # protocol number according to RFC 1700
 PROTOCOL = {'icmp': 1,
             'tcp': 6,
