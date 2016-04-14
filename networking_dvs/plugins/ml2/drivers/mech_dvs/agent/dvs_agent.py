@@ -53,11 +53,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     target = oslo_messaging.Target(version='1.4')
 
     def __init__(self,
-                 minimize_polling=False,
                  quitting_rpc_timeout=None,
-                 conf=None,
-                 dvs_monitor_respawn_interval=(
-                         dvs_constants.DEFAULT_DVS_RESPAWN)):
+                 conf=None,):
 
         super(DvsNeutronAgent, self).__init__()
 
@@ -73,8 +70,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         LOG.info(_LI("Using switch {} and portgroup {}".format(self.dvs_name, self.portgroup_name)))
 
-        self.dvs_monitor_respawn_interval = dvs_monitor_respawn_interval
-        self.minimize_polling = minimize_polling,
         self.polling_interval = 10
         self.iter_num = 0
         self.run_daemon_loop = True
@@ -329,8 +324,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                        'elapsed': elapsed})
         self.iter_num = self.iter_num + 1
 
-    def rpc_loop(self, polling_manager=None):
-        if not polling_manager: polling_manager = polling.get_polling_manager(minimize_polling=False)
+    def rpc_loop(self):
+
 
         while self._check_and_handle_signal():
             start = time.time()
@@ -355,7 +350,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             except Exception:
                 LOG.exception(_LE("Error while processing ports"))
 
-            polling_manager.polling_completed()
             self.loop_count_and_wait(start, port_stats)
 
     def daemon_loop(self):
@@ -364,7 +358,4 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         signal.signal(signal.SIGTERM, self._handle_sigterm)
         if hasattr(signal, 'SIGHUP'):
             signal.signal(signal.SIGHUP, self._handle_sighup)
-        with polling.get_polling_manager(
-                self.minimize_polling,
-                self.dvs_monitor_respawn_interval) as pm:
-            self.rpc_loop(polling_manager=pm)
+            self.rpc_loop()
