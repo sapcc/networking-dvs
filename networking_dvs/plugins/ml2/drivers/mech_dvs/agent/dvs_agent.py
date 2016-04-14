@@ -31,19 +31,13 @@ import oslo_messaging
 from oslo_service import loopingcall
 
 
-from neutron.common import config
-from neutron.agent import rpc as agent_rpc
-from neutron.agent import securitygroups_rpc as sg_rpc
-from neutron.common import constants as n_const
-from neutron.common import rpc as n_rpc
-from neutron.common import topics
 from neutron import context
+from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
+from neutron.common import topics, config, constants as n_const
 from neutron.i18n import _LE
 
-from networking_dvs.plugins.ml2.drivers.mech_dvs import config as dvs_config
-from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vmware_util
-from networking_dvs.plugins.ml2.drivers.mech_dvs import constants as dvs_constants
-from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import dvs_firewall
+from networking_dvs.plugins.ml2.drivers.mech_dvs import config as dvs_config, constants as dvs_constants
+from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import dvs_firewall, vmware_util
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -54,7 +48,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def __init__(self,
                  quitting_rpc_timeout=None,
-                 conf=None,):
+                 conf=None):
 
         super(DvsNeutronAgent, self).__init__()
 
@@ -359,3 +353,19 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         if hasattr(signal, 'SIGHUP'):
             signal.signal(signal.SIGHUP, self._handle_sighup)
             self.rpc_loop()
+
+
+def main():
+    import sys
+    config.init(sys.argv[1:])
+    config.setup_logging()
+
+    agent = DvsNeutronAgent()
+
+    # Start everything.
+    LOG.info(_LI("Agent initialized successfully, now running... "))
+    agent.daemon_loop()
+
+
+if __name__ == "__main__":
+    main()
