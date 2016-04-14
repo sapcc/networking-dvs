@@ -33,16 +33,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port = self.dvs_ports.get(p_id)
             if port is not None:
                 self._remove_sg_from_dvs_port(port)
-                self.dvs_ports.pop(port['device_id'], None)
+                self.dvs_ports.pop(port['device'], None)
                 for port_set in self.dvs_port_map.values():
                     port_set.discard(port['id'])
 
     def filter_defer_apply_on(self):
-        # LOG.info("Defer apply on filter")
+        LOG.info("Defer apply on filter")
         pass
 
     def filter_defer_apply_off(self):
-        # LOG.info("Defer apply off filter")
+        LOG.info("Defer apply off filter")
         pass
 
     @property
@@ -52,22 +52,21 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def update_security_group_members(self, sg_id, ips):
         LOG.info("update_security_group_members")
-        pass
 
     def update_security_group_rules(self, sg_id, rules):
         LOG.info("update_security_group_rules id {} rules {}".format(sg_id, rules))
-        pass
 
     def security_group_updated(self, action_type, sec_group_ids,
                                device_id=None):
         LOG.info("security_group_updated action type {} ids {} device {}".format(action_type, sec_group_ids, device_id))
-        pass
 
     def _process_port_filter(self, ports):
         LOG.info(_LI("Set security group rules for ports %s"),
                  [p['id'] for p in ports])
+
         for port in ports:
-            self.dvs_ports[port['device_id']] = port
+            self.dvs_ports[port['device']] = port
+
         self._apply_sg_rules_for_port(ports)
 
     @dvs_util.wrap_retry
@@ -80,7 +79,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for dvs, port_id_list in self.dvs_port_map.iteritems():
             port_list = [p for p in self.dvs_ports.values()
                          if p['id'] in port_id_list]
-            sg_util.update_port_rules(dvs, port_list)
+            if port_list:
+                sg_util.update_port_rules(dvs, port_list)
 
     def _get_dvs_for_port_id(self, port_id, p_key=None):
         # Check if port is already known

@@ -14,6 +14,7 @@
 
 import time
 import atexit
+import six
 
 from oslo_vmware import api as vmwareapi
 from oslo_vmware import exceptions
@@ -40,6 +41,16 @@ def _get_object_by_type(results, type_value):
     """
     return [obj for obj in results
             if obj._type == type_value]
+
+
+def session_invoke_api(func):
+    """
+    """
+
+    @six.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        self._session.invoke_api(self, func.__name__, *args, **kwargs)
+    return wrapper
 
 
 class VMWareUtil():
@@ -69,6 +80,28 @@ class VMWareUtil():
             wsdl_loc=config.wsdl_location)
 
         atexit.register(self._session.logout)
+    
+    
+    def property_collector(self, max_wait_seconds=0, max_object_updates=0):
+        vim = self._session.vim
+        client_factory = vim.client.factory
+        property_collector = vim.service_content.propertyCollector
+        prop_spec = vim_util.build_property_spec(client_factory, 'ManagedEntity',
+                                        ['name', 'parent'])
+
+        select_set = vim_util.build_selection_spec(client_factory, 'ParentTraversalSpec')
+        select_set = vim_util.build_traversal_spec(
+            client_factory, 'ParentTraversalSpec', 'ManagedEntity', 'parent',
+            False, [select_set])
+        obj_spec = vim_util.build_object_spec(client_factory, entity_ref, select_set)
+        prop_filter_spec = vim_util.build_property_filter_spec(client_factory,
+                                                      [prop_spec], [obj_spec])
+        options = client_factory.create('ns0:WaitOptions')
+        options.maxWaitSeconds =  max_wait_seconds
+        options.maxObjectUpdates = max_object_updates
+
+
+
     def get_datacenter(self):
         """Get the datacenter reference."""
         results = self._session.invoke_api(
@@ -142,10 +175,10 @@ class VMWareUtil():
     def bind_port(self, port_info):
         specs = []
 
-        if port_info["neutron_info"]["network_type"] == "vlan":
+        if port_info["network_type"] == "vlan":
             specs.append(self.get_vlan_port_config_spec(port_info))
         else:
-            LOG.info("Cannot configure port %s it is not of type vlan", port_info["neutron_info"]["port_id"])
+            LOG.info("Cannot configure port %s it is not of type vlan", port_info["port_id"])
 
         if specs:
             self._session.invoke_api(self._session.vim,
@@ -165,14 +198,14 @@ class VMWareUtil():
     def get_vlan_port_config_spec(self, port_info):
         client_factory = self._session.vim.client.factory
         config_spec = client_factory.create('ns0:DVPortConfigSpec')
-        config_spec.key = port_info["vmware_port"]
-        config_spec.name = port_info["neutron_info"]["port_id"]
-        config_spec.description = "Neutron port {} for network {}".format(port_info["neutron_info"]["port_id"],
-                                                                          port_info["neutron_info"]["network_id"])
+        config_spec.key = port_info["port"]["binding:vif_details"]["dvs_port_key"]
+        config_spec.name = port_info["port_id"]
+        config_spec.description = "Neutron port {} for network {}".format(port_info["port_id"],
+                                                                          port_info["network_id"])
         config_spec.operation = "edit"
         setting = client_factory.create('ns0:VMwareDVSPortSetting')
         vlan_setting = client_factory.create('ns0:VmwareDistributedVirtualSwitchVlanIdSpec')
-        vlan_setting.vlanId = port_info["neutron_info"]["segmentation_id"]
+        vlan_setting.vlanId = port_info["segmentation_id"]
         vlan_setting.inherited = False
         setting.vlan = vlan_setting
         config_spec.setting = setting
@@ -188,26 +221,25 @@ class VMWareUtil():
         criteria.inside = True
 
         start = time.clock()
-        ports = self._session.invoke_api(self._session.vim,
-                                         "FetchDVPorts",
+        ports = self._session.invoke_api(self._session.vim, "FetchDVPorts",
                                          self.dvs_ref, criteria=criteria)
 
-        LOG.info("Fetch {} ports in {}".format(len(ports), time.clock() - start))
+        # LOG.info("Fetch {} ports in {}".format(len(ports), time.clock() - start))
 
         port_info = {}
         reset_port_info_specs = []
 
         for p in ports:
-            connected_vlan = None
+            segmentation_id = None
             mac = None
             if hasattr(p, "config") \
                     and hasattr(p.config, "setting") \
                     and hasattr(p.config.setting, "vlan") \
                     and p.config.setting.vlan.vlanId:
 
-                connected_vlan = p.config.setting.vlan.vlanId
+                segmentation_id = p.config.setting.vlan.vlanId
 
-                if connected_vlan == self.default_vlan:
+                if segmentation_id == self.default_vlan:
                     if hasattr(p.config, "name") and p.config.name:
                         LOG.info("Adding reset port spec for {} {}".format(p.config.name, p.config.name == ""))
                         reset_port_info_specs.append(self.get_empty_port_config_spec(p))
@@ -230,15 +262,16 @@ class VMWareUtil():
                 mac = self.get_vm_mac(p.connectee.connectedEntity.value, p.connectee.nicKey)
 
             if mac is not None:
-                port_info[mac] = {"vmware_port": p.key, "connected_vlan": connected_vlan}
+                port_info[mac] = {"port": {"mac_address": mac,
+                                           "binding:vif_details": {"dvs_port_key": p.key}},
+                                  "current_segmentation_id": segmentation_id}
 
         if reset_port_info_specs:
             self._session.invoke_api(self._session.vim,
                                      "ReconfigureDVPort_Task",
                                      self.dvs_ref, port=reset_port_info_specs)
 
-        LOG.info(_LI("Vcenter integration bridge {} scan completed in {} seconds".format(self.portgroup_name,
-                                                                                         time.clock() - start)))
+        # LOG.info(_LI("Vcenter integration bridge {} scan completed in {} seconds".format(self.portgroup_name, time.clock() - start)))
         return port_info
 
     def get_vm_mac(self, vm_name, nic_key):
