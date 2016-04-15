@@ -37,25 +37,11 @@ from neutron.i18n import _LI, _LW, _LE
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
 from networking_dvs.common import constants as dvs_constants, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vmware_util
+from networking_dvs.common.util import dict_merge
 
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
-def dict_merge(dct, merge_dct):
-    """ Recursive dict merge. Inspired by :meth:``dict.update()``, instead of
-    updating only top-level keys, dict_merge recurses down into dicts nested
-    to an arbitrary depth, updating keys. The ``merge_dct`` is merged into
-    ``dct``.
-    :param dct: dict onto which the merge is executed
-    :param merge_dct: dct merged into dct
-    :return: None
-    """
-    for k, v in merge_dct.iteritems():
-        if (k in dct and isinstance(dct[k], dict)
-                and isinstance(merge_dct[k], dict)):
-            dict_merge(dct[k], merge_dct[k])
-        else:
-            dct[k] = merge_dct[k]
 
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
@@ -233,7 +219,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         for neutron_info in neutron_ports:
             if neutron_info:
-                LOG.info(str(neutron_info))
                 port_info = ports_by_mac.get(neutron_info.get("mac_address", None), None)
                 if port_info:
                     port_info["port"]["id"] = neutron_info["port_id"]
@@ -300,9 +285,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         # Get current ports known on the VMWare integration bridge
         ports = self._scan_ports(self.fullsync)
-
-        if self.fullsync:
-            LOG.info(str(ports))
 
         unbound_ports = [port for port in ports if port["current_segmentation_id"] != port['segmentation_id']]
 

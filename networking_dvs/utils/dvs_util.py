@@ -379,19 +379,16 @@ class DVSController(object):
         return ports[0]
 
     def get_ports(self, connect_flag=True):
-        ports = []
         builder = SpecBuilder(self.connection.vim.client.factory)
         criteria = builder.port_criteria(connected=connect_flag)
         ports = self.connection.invoke_api(
             self.connection.vim,
             'FetchDVPorts',
             self._dvs, criteria=criteria)
-        p_ret = []
-        for port in ports:
-            if (getattr(port.config, 'name', None) is not None and
-                    self._valid_uuid(port.config.name)):
-                p_ret.append(port)
-        return p_ret
+        ports = [ port for port in ports
+                 if (getattr(port.config, 'name', None) is not None
+                     and self._valid_uuid(port.config.name)) ]
+        return ports
 
     def _get_ports_ids(self):
         return [port.config.name for port in self.get_ports()]
@@ -506,18 +503,23 @@ def create_network_map_from_config(config):
 def create_port_map(dvs_list):
     port_map = {}
     for dvs in dvs_list:
-        port_map[dvs] = dvs._get_ports_ids()
+        port_map[dvs] = dvs.get_ports()
 
     return port_map
 
 
-def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
+def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
     for dvs in dvs_list:
         port = dvs._get_port_info_by_portkey(port_key)
         if port:
             if port.config.name == port_id:
-                return dvs
-    return None
+                return dvs, port
+    return None, None
+
+
+def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
+    dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
+    return dvs
 
 
 def wrap_retry(func):

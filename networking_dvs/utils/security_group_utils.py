@@ -17,11 +17,14 @@ import abc
 
 import six
 from oslo_log import log
-from neutron.i18n import _LI
+from oslo_concurrency import lockutils
 from oslo_vmware import exceptions as vmware_exceptions
+
+from neutron.i18n import _LI
 
 from networking_dvs.common import constants as dvs_const, exceptions
 from networking_dvs.utils import dvs_util
+
 
 LOG = log.getLogger(__name__)
 
@@ -186,6 +189,7 @@ class DropAllRule(TrafficRuleBuilder):
 
 
 @dvs_util.wrap_retry
+@lockutils.synchronized('oslo_vmware_api_lock')
 def update_port_rules(dvs, ports):
     try:
         builder = dvs_util.SpecBuilder(dvs.connection.vim.client.factory)
