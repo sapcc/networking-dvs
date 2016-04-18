@@ -77,7 +77,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @dvs_util.wrap_retry
     def _apply_sg_rules_for_port(self, ports):
-        LOG.debug("\n----------------------------\n")
         for port in ports:
             # Call _get_dvs_for_port to set up dvs port map for ports
             self._get_dvs_for_port(port)
@@ -87,8 +86,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                          if p['id'] in port_id_list]
             if port_list:
                 sg_util.update_port_rules(dvs, port_list)
-
-        LOG.debug("\n----------------------------\n")
 
     @staticmethod
     def _dvs_port_to_neutron(port, dvs_port):
