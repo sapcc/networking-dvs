@@ -487,12 +487,17 @@ class SpecBuilder(object):
 
 def create_network_map_from_config(config):
     """Creates physical network to dvs map from config"""
+    kwargs = {}
+    if config.wsdl_location:
+        kwargs['wsdl_loc'] = config.wsdl_location
+
     connection = api.VMwareAPISession(
         config.vsphere_hostname,
         config.vsphere_login,
         config.vsphere_password,
         config.api_retry_count,
-        config.task_poll_interval)
+        config.task_poll_interval,
+        **kwargs)
     network_map = {}
     for pair in config.network_maps:
         network, dvs = pair.split(':')

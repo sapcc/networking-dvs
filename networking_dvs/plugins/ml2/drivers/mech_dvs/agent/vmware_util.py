@@ -70,14 +70,16 @@ class VMWareUtil():
 
     def _create_session(self, config):
         """Create Vcenter Session for API Calling."""
+        kwargs = {'create_session': True }
+        if config.wsdl_location:
+            kwargs['wsdl_loc'] = config.wsdl_location
         self._session = vmwareapi.VMwareAPISession(
             config.vsphere_hostname,
             config.vsphere_login,
             config.vsphere_password,
             config.api_retry_count,
             config.task_poll_interval,
-            create_session=True,
-            wsdl_loc=config.wsdl_location)
+            **kwargs)
 
         atexit.register(self._session.logout)
     
