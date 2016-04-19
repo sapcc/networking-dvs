@@ -208,25 +208,26 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         self.catch_sighup = True
 
     def _scan_ports(self, full_scan=False):
-        start = time.clock()
+        try:
+            start = time.clock()
+            ports_by_mac = self.api.get_connected_ports_on_dvpg(not full_scan)
+            macs = six.viewkeys(ports_by_mac)
+            neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
+                                                                       host=self.conf.host)
 
-        ports_by_mac = self.api.get_connected_ports_on_dvpg(not full_scan)
+            for neutron_info in neutron_ports:
+                if neutron_info:
+                    port_info = ports_by_mac.get(neutron_info.get("mac_address", None), None)
+                    if port_info:
+                        port_info["port"]["id"] = neutron_info["port_id"]
+                        dict_merge(port_info, neutron_info)
 
-        macs = six.viewkeys(ports_by_mac)
+            LOG.info(_LI("Scan ports completed in {} seconds".format(time.clock() - start)))
 
-        neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
-                                                                 host=self.conf.host)
-
-        for neutron_info in neutron_ports:
-            if neutron_info:
-                port_info = ports_by_mac.get(neutron_info.get("mac_address", None), None)
-                if port_info:
-                    port_info["port"]["id"] = neutron_info["port_id"]
-                    dict_merge(port_info, neutron_info)
-
-        # LOG.info(_LI("Scan ports completed in {} seconds".format(time.clock() - start)))
-
-        return ports_by_mac.values()
+            return ports_by_mac.values()
+        except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError) as e:
+            LOG.error(_LI("Failed to get ports via RPC. Reason: %s"), e)
+            return []
 
     def _bind_ports(self, unbound_ports):
         devices_up = []
