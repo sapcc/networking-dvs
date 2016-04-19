@@ -12,10 +12,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import atexit
 import time
 
 from neutron.i18n import _LI, _LW
-import six
 
 from oslo_vmware import api as vmwareapi
 from oslo_vmware import exceptions
@@ -73,32 +73,42 @@ class VMWareUtil():
         atexit.register(self._session.logout)
     
     
-    def bind_port(self, port_info):
+    def bind_ports(self, port_infos):
         specs = []
-
-        if port_info["network_type"] == "vlan":
-            specs.append(self._get_vlan_port_config_spec(port_info))
-        else:
-            LOG.info("Cannot configure port %s it is not of type vlan", port_info["port_id"])
+        devices_up = []
+        devices_down = []
+        for port_info in port_infos:
+            if port_info["network_type"] == "vlan":
+                specs.append(self._get_vlan_port_config_spec(port_info))
+                devices_up.append(port_info["port_id"])
+            else:
+                devices_down.append(port_info["port_id"])
+                LOG.info("Cannot configure port %s it is not of type vlan", port_info["port_id"])
 
         if specs:
-            self._session.invoke_api(self._session.vim,
+            task = self._session.invoke_api(self._session.vim,
                                      "ReconfigureDVPort_Task",
                                      self.dvs_ref, port=specs)
+            result = self._session.wait_for_task(task)
+            if result.state == "success":
+                return devices_up, devices_down
 
-    def get_connected_ports_on_dvpg(self, default_vlan_only=True):
+        return [], devices_down # Either we do not have any specs (for various reasons) or the task did not succeed.
+
+    def get_ports_on_dvpg(self, default_vlan_only=True):
         start = time.clock()
 
         client_factory = self._session.vim.client.factory
         criteria = client_factory.create('ns0:DistributedVirtualSwitchPortCriteria')
-        criteria.portgroupKey = self.dvpg_key
+        criteria.portgroupKey = [self.dvpg_key]
         criteria.inside = True
+        criteria.uplinkPort = False
 
         start = time.clock()
         ports = self._session.invoke_api(self._session.vim, "FetchDVPorts",
                                          self.dvs_ref, criteria=criteria)
 
-        # LOG.info("Fetch {} ports in {}".format(len(ports), time.clock() - start))
+        LOG.debug("Fetch {} ports in {}".format(len(ports), time.clock() - start))
 
         port_info = {}
         reset_port_info_specs = []

@@ -505,10 +505,10 @@ def create_network_map_from_config(config):
     return network_map
 
 
-def create_port_map(dvs_list):
+def create_port_map(dvs_list, connect_flag=True):
     port_map = {}
     for dvs in dvs_list:
-        port_map[dvs] = dvs.get_ports()
+        port_map[dvs] = dict([[port.key, port] for port in dvs.get_ports(connect_flag)])
 
     return port_map
 
