@@ -28,6 +28,7 @@ eventlet.monkey_patch()
 import oslo_messaging
 from oslo_log import log as logging
 from oslo_service import loopingcall
+from oslo_vmware.exceptions import VMwareDriverException
 
 from neutron import context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
@@ -110,7 +111,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         port_id = port['id']
         if port_id in self.known_ports and not port_id in self.deleted_ports: # Avoid updating a port, which has not been created yet
             self.updated_ports[port_id] = port
-        LOG.info("port_update message processed for port {}".format(port_id))
+        LOG.debug("port_update message processed for port {}".format(port_id))
 
     def port_delete(self, context, **kwargs):
         port_id = kwargs.get('port_id')
@@ -120,7 +121,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
 
     def network_create(self, context, **kwargs):
-        LOG.info(_LI("Agent network_create"))
+        LOG.debug(_LI("Agent network_create"))
 
     def network_update(self, context, **kwargs):
         network_id = kwargs['network']['id']
@@ -135,7 +136,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                    'ports': self.network_ports[network_id]})
 
     def network_delete(self, context, **kwargs):
-        LOG.info(_LI("Agent network_delete"))
+        LOG.debug(_LI("Agent network_delete"))
 
     def _clean_network_ports(self, port_id):
         for port_set in six.itervalues(self.network_ports):
@@ -171,16 +172,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                                      start_listening=False)
 
     def _report_state(self):
-        # LOG.info(_LI("******** Reporting state via rpc"))
-
+        # LOG.debug(_LI("******** Reporting state via rpc"))
         try:
             self.state_rpc.report_state(self.context,
                                         self.agent_state)
 
             self.agent_state.pop('start_flag', None)
-            # LOG.info(_LI("******** Reporting state completed"))
-        except Exception:
-            # LOG.info(_LI("******** Reporting state via rpc failed "))
+            # LOG.debug(_LI("******** Reporting state completed"))
+        except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError, oslo_messaging.MessageDeliveryFailure):
             LOG.exception(_LE("Failed reporting state!"))
 
     def _check_and_handle_signal(self):
@@ -225,8 +224,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             LOG.info(_LI("Scan ports completed in {} seconds".format(time.clock() - start)))
 
             return ports_by_mac.values()
-        except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError) as e:
-            LOG.error(_LI("Failed to get ports via RPC. Reason: %s"), e)
+        except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
+            LOG.exception(_LE("Failed to get ports via RPC"))
             return []
 
     def _bind_ports(self, unbound_ports):
@@ -242,7 +241,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                     self.api.bind_port(port)
                     devices_up.append(port['port_id'])
                     port["current_segmentation_id"] = port['segmentation_id']
-                except Exception:
+                except VMwareDriverException:
                     devices_down.append(port['port_id'])
 
         # LOG.info("Updating ports up {} down {} agent {} host {}".format(devices_up, devices_down, self.agent_id, self.conf.host))
