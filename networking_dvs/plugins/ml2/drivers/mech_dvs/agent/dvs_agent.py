@@ -115,7 +115,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def port_delete(self, context, **kwargs):
         port_id = kwargs.get('port_id')
-        self.updated_ports.pop(port_id, port_id)
+        self.updated_ports.pop(port_id, None)
         self.deleted_ports.add(port_id)
         LOG.debug("port_delete message processed for port {}".format(port_id))
 
@@ -281,7 +281,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self.sg_agent.remove_devices_filter(deleted_ports)
             self.deleted_ports = self.deleted_ports - deleted_ports # This way we miss fewer concurrent update
             for port_id in deleted_ports:
-                self.known_ports.pop(port_id, port_id)
+                self.known_ports.pop(port_id, None)
 
         # Get current ports known on the VMWare integration bridge
         ports = self._scan_ports(self.fullsync)
@@ -302,7 +302,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         updated_ports = self.updated_ports.copy()
         for port in six.iterkeys(updated_ports):
-            self.updated_ports.pop(port, port)
+            self.updated_ports.pop(port, None)
         # update firewall agent if we have added or updated ports
         if self.updated_ports or added_ports:
             LOG.info("Calling setup_port_filters")
