@@ -14,6 +14,7 @@
 
 import re
 import time
+import atexit
 
 from oslo_vmware import api as vmwareapi
 from oslo_vmware import exceptions
@@ -74,6 +75,7 @@ class VMWareUtil():
             create_session=True,
             wsdl_loc=wsdl_location)
 
+        atexit.register(self._session.logout)
 
     def get_datacenter(self):
         """Get the datacenter reference."""
