@@ -14,9 +14,10 @@
 
 import atexit
 import six
+import time
 from collections import defaultdict
 
-from neutron.i18n import _LI, _
+from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
 from oslo_vmware import exceptions, vim_util, api as vmwareapi
@@ -51,7 +52,6 @@ class VMWareUtil():
         self._property_collector = None
 
         self._dvs_name = config.dv_switch
-        self._default_vlan = config.dv_default_vlan
 
         self._dvs_ref = self._get_dvs(self._dvs_name)
         self._dvs_uuid = self._session.invoke_api(vim_util, 'get_object_property', self._session.vim, self._dvs_ref, 'uuid')
@@ -65,23 +65,55 @@ class VMWareUtil():
         specs = []
         devices_up = []
         devices_down = []
-        for port_info in port_info:
-            if port_info["network_type"] == "vlan":
-                specs.append(self._get_vlan_port_config_spec(port_info))
-                devices_up.append(port_info["port_id"])
-            else:
-                devices_down.append(port_info["port_id"])
-                LOG.info("Cannot configure port %s it is not of type vlan", port_info["port_id"])
 
-        if specs:
+        id_for_key = {}
+
+        for pi in port_info:
+            port_key = pi["port"]["binding:vif_details"]["dvs_port_key"]
+            id_for_key[port_key] = pi["port_id"]
+            if pi["network_type"] == "vlan":
+                specs.append(self._get_vlan_port_config_spec(pi))
+            else:
+                devices_down.append(pi["port_id"])
+                LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), port_info["port_id"])
+
+        iterations = 3
+        while specs and iterations > 0:
             task = self._session.invoke_api(self._session.vim,
                                      "ReconfigureDVPort_Task",
                                             self._dvs_ref, port=specs)
             result = self._session.wait_for_task(task)
-            if result.state == "success":
-                return devices_up, devices_down
 
-        return [], devices_down # Either we do not have any specs (for various reasons) or the task did not succeed.
+            if result.state == "success":
+                port_keys = set([str(spec.key) for spec in specs])
+                
+                vim = self._session.vim
+                criteria = VMWareUtil._build_distributed_virtual_switch_port_criteria(vim.client.factory,
+                                                                                      None,
+                                                                                      list(port_keys))
+                dv_ports = self._session.invoke_api(vim, "FetchDVPorts", self._dvs_ref, criteria=criteria)
+
+                # Filter
+                port_keys_down = set([str(p.key) for p in dv_ports
+                                      if not hasattr(p, "state")
+                                      or not hasattr(p.state, 'runtimeInfo')
+                                      or not p.state.runtimeInfo.linkUp
+                                      or not hasattr(p.state.runtimeInfo, 'vlanIds')
+                                      or not p.state.runtimeInfo.vlanIds])
+                port_keys_up = port_keys - port_keys_down
+
+                for spec in specs:
+                    port_key = spec.key
+                    if port_key in port_keys_up:
+                        devices_up.append(pi["port_id"])
+                        specs.remove(spec)
+
+            iterations -= 1
+
+        for spec in specs:
+            devices_down.append(id_for_key[spec.key])
+
+        return devices_up, devices_down
 
     def get_new_ports(self, _=True):
         vim = self._session.vim
@@ -180,9 +212,6 @@ class VMWareUtil():
         wait_options.maxObjectUpdates = max_object_updates
         return wait_options
 
-    def _get_empty_port_config_spec(self, port):
-        return VMWareUtil._build_port_config_spec(self._session.vim.client.factory, port.key, "", "")
-
     def _get_vlan_port_config_spec(self, port_info):
         client_factory = self._session.vim.client.factory
 
@@ -191,6 +220,10 @@ class VMWareUtil():
         vlan_setting.inherited = False
         setting = client_factory.create('ns0:VMwareDVSPortSetting')
         setting.vlan = vlan_setting
+        setting.blocked =  client_factory.create('ns0:BoolPolicy')
+        setting.blocked.inherited = '1'
+        setting.filterPolicy = client_factory.create('ns0:DvsFilterPolicy')
+        setting.filterPolicy.inherited = '1'
 
         return VMWareUtil._build_port_config_spec(client_factory,
                                                   port_info["port"]["binding:vif_details"]["dvs_port_key"],
@@ -273,6 +306,7 @@ class VMWareUtil():
                                           spec=property_filter_spec, partialUpdates=True) # result -> PropertyFilter
 
         return self._property_collector
+
 
 #  Small test routine
 def main():

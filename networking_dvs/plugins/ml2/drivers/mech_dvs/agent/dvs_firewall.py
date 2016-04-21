@@ -41,15 +41,12 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def filter_defer_apply_on(self):
         LOG.info("Defer apply on filter")
-        pass
 
     def filter_defer_apply_off(self):
         LOG.info("Defer apply off filter")
-        pass
 
     @property
     def ports(self):
-        # LOG.info("ports")
         return self.dvs_ports
 
     def update_security_group_members(self, sg_id, ips):
@@ -81,7 +78,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         for port in ports:
             dvs = self._get_dvs_for_port(port)
-            per_port_map[dvs].append(port)
+            if dvs:
+                per_port_map[dvs].append(port)
 
         for dvs, port_list in six.iteritems(per_port_map):
             if port_list:
@@ -97,11 +95,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def _get_dvs_for_port(self, port):
         port_id = port['id']
-        LOG.debug("Looking up port_id: {}".format(port_id))
 
         # Check if port is already known
         if port_id in six.viewkeys(self.dvs_port_map):
-            LOG.debug("Port is already known")
             dvs, dvs_port_key = self.dvs_port_map[port_id]
             vif_details = port.get('binding:vif_details', {})
             vif_details['dvs_port_key'] = dvs_port_key
@@ -111,19 +107,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # If port is not known - get fresh port_map from vCenter
             dvs_port_key = port.get('binding:vif_details', {}).get('dvs_port_key')
             if dvs_port_key:
-                # LOG.debug("Have port_key: {}".format(dvs_port_key))
                 dvs, dvs_port = dvs_util.get_dvs_and_port_by_id_and_key(
                     six.viewvalues(self.networking_map), port_id, dvs_port_key)
 
                 if dvs and dvs_port:
-                    # LOG.debug("Found / dvs_port")
                     DvsSecurityGroupsDriver._dvs_port_to_neutron(port, dvs_port)
                     return self._get_dvs_and_put_dvs_in_port_map(dvs, port_id, dvs_port_key)
 
             # Here it gets expensive, we practically have to fetch all the ports, so we can as well store the data
             # in the hope, that it will save us a future call
 
-            LOG.debug("Iterating over all ports")
             port_map = dvs_util.create_port_map(six.viewvalues(self.networking_map))
 
             found_dvs = None
@@ -133,7 +126,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     self._get_dvs_and_put_dvs_in_port_map(dvs, dvs_port.config.name, port_key)
                     if port_id == dvs_port.config.name:
                         found_dvs = dvs
-                        # LOG.debug("Found port in portmap")
                         DvsSecurityGroupsDriver._dvs_port_to_neutron(port, dvs_port)
 
             if found_dvs:
@@ -142,7 +134,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 LOG.warning(_LW("Cannot find dvs for port %s"), port_id)
 
     def _get_dvs_and_put_dvs_in_port_map(self, dvs, port_id, port_key):
-        LOG.debug("{} -> {}:{}".format(port_id, dvs.dvs_name, port_key))
         self.dvs_port_map[port_id] = (dvs, port_key)
         return dvs
 

@@ -87,8 +87,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                                          integration_bridge=self.api.session(), # Passed on to FireWall Driver
                                                          defer_refresh_firewall=True)
 
-        self.default_vlan = self.conf.ML2_VMWARE.dv_default_vlan
-
         self.run_daemon_loop = True
         self.iter_num = 0
 
@@ -227,15 +225,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             return []
 
     def _bind_ports(self, unbound_ports):
-        _unbound_ports = [ port for port in unbound_ports if port["current_segmentation_id"] != port['segmentation_id'] ]
-
-        devices_up, devices_down = self.api.bind_ports(_unbound_ports)
-        for port in _unbound_ports:
+        devices_up, devices_down = self.api.bind_ports(unbound_ports)
+        for port in unbound_ports:
             if port["port_id"] in devices_up:
                 port["current_segmentation_id"] = port['segmentation_id']
 
-        #LOG.debug("Updating ports up {} down {} agent {} host {}".format(devices_up, devices_down,
-        #                                                                self.agent_id, self.conf.host))
+        LOG.debug("Updating ports up {} down {} agent {} host {}".format(devices_up, devices_down,
+                                                                        self.agent_id, self.conf.host))
 
         result = self.plugin_rpc.update_device_list(self.context, devices_up, devices_down, self.agent_id,
                                                     self.conf.host)
@@ -269,7 +265,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         if deleted_ports:
             # Nothing really to do on the VCenter - we let the vcenter unplug - so all we need to do is
             # trigger the firewall update and clear the deleted ports list
-            self.sg_agent.remove_devices_filter(deleted_ports)
+            if self.sg_agent:
+                self.sg_agent.remove_devices_filter(deleted_ports)
             self.deleted_ports = self.deleted_ports - deleted_ports # This way we miss fewer concurrent update
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
@@ -294,7 +291,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         for port in six.iterkeys(updated_ports):
             self.updated_ports.pop(port, None)
         # update firewall agent if we have added or updated ports
-        if updated_ports or added_ports:
+        if self.sg_agent and (updated_ports or added_ports):
             # LOG.debug("Calling setup_port_filters")
             self.sg_agent.setup_port_filters(added_ports, six.viewkeys(updated_ports))
 
