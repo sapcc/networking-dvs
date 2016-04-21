@@ -89,10 +89,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         self.run_daemon_loop = True
         self.iter_num = 0
-        self.fullsync = True
 
         self.quitting_rpc_timeout = quitting_rpc_timeout
-
 
         self.updated_ports = {}
         self.known_ports = {}
@@ -205,10 +203,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _handle_sighup(self, signum, frame):
         self.catch_sighup = True
 
-    def _scan_ports(self, full_scan=False):
+    def _scan_ports(self):
         try:
             start = time.clock()
-            ports_by_mac = self.api.get_ports_on_dvpg(not full_scan)
+            ports_by_mac = self.api.get_new_ports()
             macs = six.viewkeys(ports_by_mac)
             neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
                                                                        host=self.conf.host)
@@ -276,7 +274,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 self.known_ports.pop(port_id, None)
 
         # Get current ports known on the VMWare integration bridge
-        ports = self._scan_ports(self.fullsync)
+        ports = self._scan_ports()
 
         unbound_ports = [port for port in ports if port["current_segmentation_id"] != port['segmentation_id']]
 
@@ -309,12 +307,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         while self._check_and_handle_signal():
             start = time.clock()
             port_stats = {'regular': self.process_ports() }
-            self.fullsync = False
             self.loop_count_and_wait(start, port_stats)
 
     def daemon_loop(self):
         # Start everything.
-        LOG.info(_LI("Agent initialized successfully, now running... "))
         signal.signal(signal.SIGTERM, self._handle_sigterm)
 
         if hasattr(signal, 'SIGHUP'):
