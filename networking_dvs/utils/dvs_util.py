@@ -13,10 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import atexit
 from time import sleep
 import uuid
 import six
-
 
 from neutron.i18n import _LI, _LW
 from oslo_log import log
@@ -485,19 +485,23 @@ class SpecBuilder(object):
         return spec
 
 
-def create_network_map_from_config(config):
+def create_network_map_from_config(config, connection=None):
     """Creates physical network to dvs map from config"""
     kwargs = {}
     if config.wsdl_location:
         kwargs['wsdl_loc'] = config.wsdl_location
 
-    connection = api.VMwareAPISession(
-        config.vsphere_hostname,
-        config.vsphere_login,
-        config.vsphere_password,
-        config.api_retry_count,
-        config.task_poll_interval,
-        **kwargs)
+    if not connection:
+        connection = api.VMwareAPISession(
+            config.vsphere_hostname,
+            config.vsphere_login,
+            config.vsphere_password,
+            config.api_retry_count,
+            config.task_poll_interval,
+            **kwargs)
+
+        atexit.register(connection.logout)
+
     network_map = {}
     for pair in config.network_maps:
         network, dvs = pair.split(':')

@@ -76,13 +76,15 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         self.polling_interval = 10
 
+        self.api = vmware_util.VMWareUtil(self.conf.ML2_VMWARE)
+
         self.enable_security_groups = self.conf.get('SECURITYGROUP', {}).get('enable_security_group', False)
         # Security group agent support
         if self.enable_security_groups:
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
                                                          self.sg_plugin_rpc,
                                                          local_vlan_map=None,
-                                                         integration_bridge=None, # Passed on to FireWall Driver
+                                                         integration_bridge=self.api.session(), # Passed on to FireWall Driver
                                                          defer_refresh_firewall=True)
 
         self.default_vlan = self.conf.ML2_VMWARE.dv_default_vlan
@@ -99,7 +101,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         self.network_ports = collections.defaultdict(set)
 
-        self.api = vmware_util.VMWareUtil(self.conf.ML2_VMWARE)
         self.catch_sigterm = False
         self.catch_sighup = False
         self.connection.consume_in_threads()

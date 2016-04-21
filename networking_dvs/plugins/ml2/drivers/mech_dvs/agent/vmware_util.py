@@ -58,6 +58,9 @@ class VMWareUtil():
 
         LOG.info(_LI("Using switch {} ({})".format(self._dvs_name, self._dvs_uuid)))
 
+    def session(self):
+        return self._session
+
     def bind_ports(self, port_info):
         specs = []
         devices_up = []

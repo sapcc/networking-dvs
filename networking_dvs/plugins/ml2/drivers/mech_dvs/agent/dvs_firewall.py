@@ -14,8 +14,8 @@ CONF = config.CONF
 
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
-        self.networking_map = dvs_util.create_network_map_from_config(
-            CONF.ML2_VMWARE)
+
+        self.networking_map = dvs_util.create_network_map_from_config(CONF.ML2_VMWARE, integration_bridge)
         self.dvs_ports = {}  # Contains the list of known ports, this may fill over time
         self._defer_apply = False
         # Map for known ports and dvs it is connected to.
