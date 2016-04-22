@@ -30,14 +30,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def update_port_filter(self, ports):
         self._process_port_filter(ports)
 
-    def remove_port_filter(self, ports):
-        LOG.info(_LI("Clean up security group rules on deleted ports"))
-        for p_id in ports:
-            port = self.dvs_ports.get(p_id)
-            if port is not None:
-                self._remove_sg_from_dvs_port(port)
-                self.dvs_ports.pop(port['device'], None)
-                self.dvs_port_map.pop(port['id'], None)
+    def remove_port_filter(self, port_ids):
+        self._remove_sg_from_dvs_port(port_ids)
 
     def filter_defer_apply_on(self):
         LOG.info("Defer apply on filter")
@@ -73,15 +67,31 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._apply_sg_rules_for_port(ports)
 
     @dvs_util.wrap_retry
+    def _remove_sg_from_dvs_port(self, port_ids):
+        LOG.info(_LI("Clean up security group rules on deleted ports {}").format(port_ids))
+        ports_by_dvs = defaultdict(list)
+
+        for port_id in port_ids:
+            dvs, port_key, device_id = self.dvs_port_map.pop(port_id, (None, None, None))
+            port = self.dvs_ports.pop(device_id, {})
+            port['id'] = port_id
+            port['security_group_rules'] = None
+            ports_by_dvs[dvs].append(port)
+
+        for dvs, ports in six.iteritems(ports_by_dvs):
+            if dvs:
+                sg_util.update_port_rules(dvs, ports)
+
+    @dvs_util.wrap_retry
     def _apply_sg_rules_for_port(self, ports):
-        per_port_map = defaultdict(list)
+        ports_by_dvs = defaultdict(list)
 
         for port in ports:
             dvs = self._get_dvs_for_port(port)
             if dvs:
-                per_port_map[dvs].append(port)
+                ports_by_dvs[dvs].append(port)
 
-        for dvs, port_list in six.iteritems(per_port_map):
+        for dvs, port_list in six.iteritems(ports_by_dvs):
             if port_list:
                 sg_util.update_port_rules(dvs, port_list)
 
@@ -95,10 +105,13 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def _get_dvs_for_port(self, port):
         port_id = port['id']
+        device_id = port['device']
 
         # Check if port is already known
         if port_id in six.viewkeys(self.dvs_port_map):
-            dvs, dvs_port_key = self.dvs_port_map[port_id]
+            dvs, dvs_port_key, stored_device_id = self.dvs_port_map[port_id]
+            if stored_device_id != device_id:
+                self.dvs_port_map[port_id] = (dvs, dvs_port_key, device_id)
             vif_details = port.get('binding:vif_details', {})
             vif_details['dvs_port_key'] = dvs_port_key
             port['binding:vif_details'] = vif_details
@@ -112,7 +125,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
                 if dvs and dvs_port:
                     DvsSecurityGroupsDriver._dvs_port_to_neutron(port, dvs_port)
-                    return self._get_dvs_and_put_dvs_in_port_map(dvs, port_id, dvs_port_key)
+                    return self._put_dvs_in_port_map(dvs, port_id, dvs_port_key)
 
             # Here it gets expensive, we practically have to fetch all the ports, so we can as well store the data
             # in the hope, that it will save us a future call
@@ -123,22 +136,17 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             for dvs, ports in six.iteritems(port_map):
                 for port_key, dvs_port in six.iteritems(ports):
-                    self._get_dvs_and_put_dvs_in_port_map(dvs, dvs_port.config.name, port_key)
                     if port_id == dvs_port.config.name:
+                        self._put_dvs_in_port_map(dvs, dvs_port.config.name, port_key, device_id)
                         found_dvs = dvs
                         DvsSecurityGroupsDriver._dvs_port_to_neutron(port, dvs_port)
+                    else:
+                        self._put_dvs_in_port_map(dvs, dvs_port.config.name, port_key, None)
 
             if found_dvs:
                 return found_dvs
             else:
                 LOG.warning(_LW("Cannot find dvs for port %s"), port_id)
 
-    def _get_dvs_and_put_dvs_in_port_map(self, dvs, port_id, port_key):
-        self.dvs_port_map[port_id] = (dvs, port_key)
-        return dvs
-
-    def _remove_sg_from_dvs_port(self, port):
-        port['security_group_rules'] = []
-        dvs = self._get_dvs_for_port(port)
-        if dvs:
-            sg_util.update_port_rules(dvs, [port])
+    def _put_dvs_in_port_map(self, dvs, port_id, port_key, device_id):
+        self.dvs_port_map[port_id] = (dvs, port_key, device_id)

@@ -231,18 +231,19 @@ def port_configuration(builder, port_key, sg_rules):
     rules = []
     reversed_rules = []
     seq = 0
-    for rule_info in sg_rules:
-        rule = _create_rule(builder, rule_info, name='regular')
-        rules.append(rule.build(seq))
-        seq += 10
-        cidr_revert = True
-        if rule.ethertype == 'IPv4' \
-                and rule.DIRECTION == 'incomingPackets' \
-                and rule.protocol == 'udp':
-            if rule.backward_port_range == (67, 67) \
-                    and rule.port_range == (68, 68):
-                cidr_revert = False
-        reversed_rules.append(rule.reverse(cidr_revert))
+    if sg_rules:
+        for rule_info in sg_rules:
+            rule = _create_rule(builder, rule_info, name='regular')
+            rules.append(rule.build(seq))
+            seq += 10
+            cidr_revert = True
+            if rule.ethertype == 'IPv4' \
+                    and rule.DIRECTION == 'incomingPackets' \
+                    and rule.protocol == 'udp':
+                if rule.backward_port_range == (67, 67) \
+                        and rule.port_range == (68, 68):
+                    cidr_revert = False
+            reversed_rules.append(rule.reverse(cidr_revert))
 
     for r in reversed_rules:
         rules.append(r.build(seq))
