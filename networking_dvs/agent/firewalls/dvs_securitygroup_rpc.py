@@ -28,15 +28,17 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
             self._use_enhanced_rpc = False
         return self._use_enhanced_rpc
 
-    def prepare_devices_filter(self, device_ids):
+    def prepare_devices_filter(self, device_ids, chunk_size = 50):
         if not device_ids:
             return
         LOG.info(_LI("Preparing filters for devices %s"), device_ids)
 
-        devices = self.plugin_rpc.security_group_rules_for_devices(
-            self.context, list(device_ids))
+        device_ids = list(device_ids)
+        for i in range(0, len(device_ids), chunk_size):
+            devices = self.plugin_rpc.security_group_rules_for_devices(
+                self.context, device_ids[i:i+chunk_size])
 
-        self.firewall.prepare_port_filter(devices.values())
+            self.firewall.prepare_port_filter(devices.values())
 
     def remove_devices_filter(self, device_ids):
         if not device_ids:
@@ -44,14 +46,16 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
         LOG.info(_LI("Remove device filter for %r"), device_ids)
         self.firewall.remove_port_filter(device_ids)
 
-    def refresh_firewall(self, device_ids=None):
+    def refresh_firewall(self, device_ids=None, chunk_size = 50):
         LOG.info(_LI("Refresh firewall rules for '{}'").format(device_ids))
         if not device_ids:
             device_ids = self.firewall.ports.keys()
             if not device_ids:
                 LOG.info(_LI("No ports here to refresh firewall"))
                 return
-        devices = self.plugin_rpc.security_group_rules_for_devices(
-                self.context, device_ids)
 
-        self.firewall.update_port_filter(devices.values())
+        for i in range(0, len(device_ids), chunk_size):
+            devices = self.plugin_rpc.security_group_rules_for_devices(
+                self.context, device_ids[i:i+chunk_size])
+
+            self.firewall.update_port_filter(devices.values())
