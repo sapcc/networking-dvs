@@ -21,13 +21,6 @@ LOG = logging.getLogger(__name__)
 
 
 class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
-
-    @property
-    def use_enhanced_rpc(self):
-        if self._use_enhanced_rpc is None:
-            self._use_enhanced_rpc = False
-        return self._use_enhanced_rpc
-
     def prepare_devices_filter(self, device_ids, chunk_size = 50):
         if not device_ids:
             return
