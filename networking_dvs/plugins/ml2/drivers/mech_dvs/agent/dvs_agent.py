@@ -274,6 +274,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Get current ports known on the VMWare integration bridge
         ports = self._scan_ports()
 
+        for port in ports:
+            if not ('current_segmentation_id' in port and 'segmentation_id' in port):
+                LOG.warning(_LW("Missing attribute in port {}").format(port))
+                ports.remove(port)
+
         unbound_ports = [port for port in ports if port["current_segmentation_id"] != port['segmentation_id']]
 
         if unbound_ports:
