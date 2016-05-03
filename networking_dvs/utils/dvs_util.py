@@ -311,6 +311,7 @@ class DVSController(object):
     @staticmethod
     def _get_object_by_type(results, type_value):
         """Get object by type.
+
         Get the desired object from the given objects result by the given type.
         """
         return [obj for obj in results
@@ -323,6 +324,26 @@ class DVSController(object):
             self.connection.vim, pg, 'portKeys')[0]
 
     def _lookup_unbound_port(self, port_group):
+        builder = SpecBuilder(self.connection.vim.client.factory)
+        criteria = builder.port_criteria(port_group_key=port_group.value)
+        all_port_keys = self.connection.invoke_api(
+            self.connection.vim,
+            'FetchDVPortKeys',
+            self._dvs, criteria=criteria)
+        criteria = builder.port_criteria(port_group_key=port_group.value,
+                                         connected=True)
+        connected_port_keys = self.connection.invoke_api(
+            self.connection.vim,
+            'FetchDVPortKeys',
+            self._dvs, criteria=criteria)
+        for port_key in all_port_keys:
+            if (port_key not in connected_port_keys and
+                    port_key not in self._blocked_ports):
+                self._blocked_ports.add(port_key)
+                return self._get_port_info_by_portkey(port_key)
+        raise exceptions.UnboundPortNotFound()
+
+    def _lookup_unbound_port_old(self, port_group):
         builder = SpecBuilder(self.connection.vim.client.factory)
         criteria = builder.port_criteria(port_group_key=port_group.value)
 
@@ -420,9 +441,10 @@ class SpecBuilder(object):
         spec.policy = policy
         return spec
 
-    def port_config_spec(self, version, setting=None, name=None):
+    def port_config_spec(self, version=None, setting=None, name=None):
         spec = self.factory.create('ns0:DVPortConfigSpec')
-        spec.configVersion = version
+        if version:
+            spec.configVersion = version
         spec.operation = 'edit'
         if setting:
             spec.setting = setting
@@ -517,6 +539,15 @@ def create_port_map(dvs_list, connect_flag=True):
     return port_map
 
 
+def get_dvs_by_network(dvs_list, network_id):
+    for dvs in dvs_list:
+        try:
+            network_name = dvs._get_net_name(dvs.dvs_name, {'id': network_id})
+            if dvs._get_pg_by_name(network_name):
+                return dvs
+        except exceptions.PortGroupNotFound:
+            continue
+
 def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
     for dvs in dvs_list:
         port = dvs._get_port_info_by_portkey(port_key)
@@ -525,10 +556,6 @@ def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
                 return dvs, port
     return None, None
 
-
-def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
-    dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
-    return dvs
 
 
 def wrap_retry(func):

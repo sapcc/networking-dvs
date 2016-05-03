@@ -285,7 +285,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self._bind_ports(unbound_ports)
 
         added_ports = set()
-        known_ids = set(six.iterkeys(self.known_ports))
+        known_ids = six.viewkeys(self.known_ports)
         for port in ports:
             port_id = port["port_id"]
             if not port_id in known_ids:

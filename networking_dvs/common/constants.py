@@ -39,5 +39,3 @@ DELETED_TEXT = "The object has already been deleted or has not been "\
 
 MIN_EPHEMERAL_PORT = 32768
 MAX_EPHEMERAL_PORT = 65535
-
-DEFAULT_DVS_RESPAWN = 30
