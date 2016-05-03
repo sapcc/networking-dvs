@@ -257,6 +257,7 @@ def update_port_rules(dvs, ports):
 
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules):
+    sg_rules = sg_rules or []
     rules = []
     seq = 0
     reverse_seq = len(sg_rules) * 10
