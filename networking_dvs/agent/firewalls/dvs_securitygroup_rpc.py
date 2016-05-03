@@ -47,6 +47,7 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
                 LOG.info(_LI("No ports here to refresh firewall"))
                 return
 
+        device_ids = list(device_ids)
         for i in range(0, len(device_ids), chunk_size):
             devices = self.plugin_rpc.security_group_rules_for_devices(
                 self.context, device_ids[i:i+chunk_size])

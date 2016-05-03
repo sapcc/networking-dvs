@@ -229,18 +229,25 @@ class DropAllRule(TrafficRuleBuilder):
     action = 'ns0:DvsDropNetworkRuleAction'
 
 
+def build_port_rules(builder, ports, hashed_rules = None):
+    port_config_list = []
+    hashed_rules = hashed_rules or {}
+    for port in ports:
+        key = port.get('binding:vif_details', {}).get('dvs_port_key')
+        if key:
+            port_config = port_configuration(
+                builder, key, port['security_group_rules'], hashed_rules)
+            port_config_list.append(port_config)
+    return port_config_list
+
+
 @dvs_util.wrap_retry
 def update_port_rules(dvs, ports):
     try:
         builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
-        port_config_list = []
         hashed_rules = {}
-        for port in ports:
-            key = port.get('binding:vif_details', {}).get('dvs_port_key')
-            if key:
-                port_config = port_configuration(
-                    builder, key, port['security_group_rules'], hashed_rules)
-                port_config_list.append(port_config)
+        port_config_list = build_port_rules(builder, ports, hashed_rules)
+
         if port_config_list:
             task = dvs.connection.invoke_api(
                 dvs.connection.vim,

@@ -79,7 +79,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             ports_by_dvs[dvs].append(port)
 
         for dvs, ports in six.iteritems(ports_by_dvs):
-            if dvs:
+            if None: # dvs:
                 sg_util.update_port_rules(dvs, ports)
 
     @dvs_util.wrap_retry

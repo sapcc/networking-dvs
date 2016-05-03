@@ -539,15 +539,6 @@ def create_port_map(dvs_list, connect_flag=True):
     return port_map
 
 
-def get_dvs_by_network(dvs_list, network_id):
-    for dvs in dvs_list:
-        try:
-            network_name = dvs._get_net_name(dvs.dvs_name, {'id': network_id})
-            if dvs._get_pg_by_name(network_name):
-                return dvs
-        except exceptions.PortGroupNotFound:
-            continue
-
 def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
     for dvs in dvs_list:
         port = dvs._get_port_info_by_portkey(port_key)
@@ -556,6 +547,10 @@ def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
                 return dvs, port
     return None, None
 
+
+def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
+    dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
+    return dvs
 
 
 def wrap_retry(func):

@@ -14,7 +14,6 @@
 
 import atexit
 import six
-import time
 from collections import defaultdict
 
 from neutron.i18n import _LI, _LW, _
@@ -23,6 +22,7 @@ from oslo_log import log
 from oslo_vmware import exceptions, vim_util, api as vmwareapi
 
 from networking_dvs.common import config
+from networking_dvs.utils import dvs_util
 
 CONF = config.CONF
 LOG = log.getLogger(__name__)
@@ -61,23 +61,28 @@ class VMWareUtil():
     def session(self):
         return self._session
 
+    @dvs_util.wrap_retry
     def bind_ports(self, port_info):
         specs = []
-        devices_up = []
-        devices_down = []
+        ports_up = []
+        ports_down = []
 
-        id_for_key = {}
+        port_for_key = {}
 
         for pi in port_info:
             port_key = pi["port"]["binding:vif_details"]["dvs_port_key"]
-            id_for_key[port_key] = pi["port_id"]
+
+            if port_key in port_for_key:
+                LOG.error("Duplicate port key {} matching port {} and {}".format(port_key, pi["port_id"], port_for_key[port_key]["port_id"]))
+
+            port_for_key[port_key] = pi
             if pi["network_type"] == "vlan":
                 specs.append(self._get_vlan_port_config_spec(pi))
             else:
-                devices_down.append(pi["port_id"])
-                LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), port_info["port_id"])
+                ports_down.append(pi)
+                LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), pi["port_id"])
 
-        iterations = 3
+        iterations = 1
         while specs and iterations > 0:
             task = self._session.invoke_api(self._session.vim,
                                      "ReconfigureDVPort_Task",
@@ -85,12 +90,12 @@ class VMWareUtil():
             result = self._session.wait_for_task(task)
 
             if result.state == "success":
-                port_keys = set([str(spec.key) for spec in specs])
+                port_keys = [str(spec.key) for spec in specs]
                 
                 vim = self._session.vim
                 criteria = VMWareUtil._build_distributed_virtual_switch_port_criteria(vim.client.factory,
                                                                                       None,
-                                                                                      list(port_keys))
+                                                                                      port_keys)
                 dv_ports = self._session.invoke_api(vim, "FetchDVPorts", self._dvs_ref, criteria=criteria)
 
                 # Filter
@@ -100,20 +105,21 @@ class VMWareUtil():
                                       or not p.state.runtimeInfo.linkUp
                                       or not hasattr(p.state.runtimeInfo, 'vlanIds')
                                       or not p.state.runtimeInfo.vlanIds])
-                port_keys_up = port_keys - port_keys_down
+                port_keys_up = set(port_keys) - port_keys_down
 
                 for spec in specs:
                     port_key = spec.key
                     if port_key in port_keys_up:
-                        devices_up.append(pi["port_id"])
+                        pi = port_for_key[port_key]
+                        ports_up.append(pi)
                         specs.remove(spec)
 
             iterations -= 1
 
         for spec in specs:
-            devices_down.append(id_for_key[spec.key])
+            ports_down.append(port_for_key[spec.key])
 
-        return devices_up, devices_down
+        return ports_up, ports_down
 
     def get_new_ports(self, _=True):
         vim = self._session.vim
@@ -135,11 +141,15 @@ class VMWareUtil():
                                         if hasattr(v, 'macAddress'):
                                             mac_address = v.macAddress
                                             port = v.backing.port
-                                            results[mac_address] = {'port': {
+
+                                            results[mac_address] = {
+                                                'current_state_up': v.connectable.connected if hasattr(v, "connectable") else None,
+                                                'port': {
                                                 'binding:vif_details': {
                                                     'dvs_port_key': port.portKey,
                                                     'dvs_port_group_key': port.portgroupKey,
-                                                    'dvs_uuid': port.switchUuid
+                                                    'dvs_uuid': port.switchUuid,
+                                                    'dvs_connection_cookie': port.connectionCookie
                                                 }, 'mac_address': mac_address}}
                 self._version = result.version
             finished = not result or not hasattr(result, 'truncated') or not result.truncated
@@ -163,6 +173,10 @@ class VMWareUtil():
                         segmentation_id = p.config.setting.vlan.vlanId
                         port = port_map[p.key]
                         port['current_segmentation_id'] = segmentation_id
+                        if hasattr(p, "state") \
+                                and hasattr(p.state, "runtimeInfo") \
+                                and hasattr(p.state.runtimeInfo, "linkUp"):
+                            port['current_state_up'] = p.state.runtimeInfo.linkUp
 
         return results
 

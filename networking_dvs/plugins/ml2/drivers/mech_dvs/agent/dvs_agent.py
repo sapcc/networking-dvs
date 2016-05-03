@@ -94,6 +94,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         self.updated_ports = {}
         self.known_ports = {}
+        self.unbound_ports = {}
         self.deleted_ports = set()
         self.added_ports = set()
 
@@ -225,18 +226,20 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             return []
 
     def _bind_ports(self, unbound_ports):
-        devices_up, devices_down = self.api.bind_ports(unbound_ports)
-        for port in unbound_ports:
-            if port["port_id"] in devices_up:
-                port["current_segmentation_id"] = port['segmentation_id']
+        ports_up, ports_down = self.api.bind_ports(unbound_ports)
+        for port in ports_up:
+            port["current_segmentation_id"] = port['segmentation_id']
 
-        LOG.debug("Updating ports up {} down {} agent {} host {}".format(devices_up, devices_down,
+        port_up_ids = [pi["port_id"] for pi in ports_up]
+        port_down_ids = [pi["port_id"] for pi in ports_down]
+        LOG.debug("Updating ports up {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
                                                                         self.agent_id, self.conf.host))
 
-        result = self.plugin_rpc.update_device_list(self.context, devices_up, devices_down, self.agent_id,
+        result = self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id,
                                                     self.conf.host)
 
-        # LOG.debug("Updated ports result {}".format(result))
+        LOG.debug("Updated ports result {}".format(result))
+        return ports_up, ports_down
 
 
     def loop_count_and_wait(self, start_time, port_stats):
@@ -270,35 +273,58 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self.deleted_ports = self.deleted_ports - deleted_ports # This way we miss fewer concurrent update
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
+                self.unbound_ports.pop(port_id, None)
 
         # Get current ports known on the VMWare integration bridge
         ports = self._scan_ports()
 
+        ports_to_bind = []
         for port in ports:
-            if not ('current_segmentation_id' in port and 'segmentation_id' in port):
+            if not ("port_id" in port and 'current_segmentation_id' in port and 'segmentation_id' in port):
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
                 ports.remove(port)
+            elif port["current_segmentation_id"] != port['segmentation_id'] or \
+                            port.get("current_state_up", True) != port.get("admin_state_up", True):
+                ports_to_bind.append(port)
 
-        unbound_ports = [port for port in ports if port["current_segmentation_id"] != port['segmentation_id']]
+        if self.unbound_ports:
+            unbound_ports = self.unbound_ports.copy()
+            LOG.debug("Still down: {}".format(six.viewkeys(unbound_ports)))
+            ports_to_bind.extend(six.itervalues(unbound_ports))
+            for port_id in six.iterkeys(unbound_ports):
+                self.unbound_ports.pop(port_id, None)
 
-        if unbound_ports:
-            self._bind_ports(unbound_ports)
+        updated_ports = self.updated_ports.copy()
+
+        if ports_to_bind:
+            # LOG.debug("Ports to bind: {}".format([ port["port_id"] for port in ports_to_bind]))
+            ports_up, ports_down = self._bind_ports(ports_to_bind)
+            for port in ports_down:
+                port_id = port["port_id"]
+                # updated_ports[port_id] = port If we update it, it will trigger a security group update, which will conflict with a subsequent configuring
+                self.unbound_ports[port_id] = port
+            for port in ports_up:
+                port_id = port["port_id"]
+                updated_ports[port_id] = port
+                self.unbound_ports.pop(port_id, None)
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
         for port in ports:
-            port_id = port["port_id"]
-            if not port_id in known_ids:
+            port_id = port.get("port_id", None)
+            if port_id and not port_id in known_ids:
                 added_ports.add(port_id)
                 self.known_ports[port_id] = port
 
-        updated_ports = self.updated_ports.copy()
         for port in six.iterkeys(updated_ports):
             self.updated_ports.pop(port, None)
+
         # update firewall agent if we have added or updated ports
         if self.sg_agent and (updated_ports or added_ports):
             # LOG.debug("Calling setup_port_filters")
-            self.sg_agent.setup_port_filters(added_ports, six.viewkeys(updated_ports))
+            added_ports -= six.viewkeys(self.unbound_ports)
+            updated_ports =  six.viewkeys(updated_ports) - added_ports
+            self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
         return {
             'added': len(added_ports),
