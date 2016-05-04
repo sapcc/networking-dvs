@@ -138,13 +138,11 @@ class DVSController(object):
         try:
             port_info = self.get_port_info(port)
             builder = SpecBuilder(self.connection.vim.client.factory)
-            port_settings = builder.port_setting()
             state = not port['admin_state_up']
-            port_settings.blocked = builder.blocked(state)
+            port_settings = builder.port_setting(blocked=builder.blocked(state))
 
-            update_spec = builder.port_config_spec(
+            update_spec = builder.port_config_spec(port_info.key,
                 port_info.config.configVersion, port_settings)
-            update_spec.key = port_info.key
             update_task = self.connection.invoke_api(
                 self.connection.vim, 'ReconfigureDVPort_Task',
                 self._dvs, port=[update_spec])
@@ -175,11 +173,9 @@ class DVSController(object):
                         raise e
 
             builder = SpecBuilder(self.connection.vim.client.factory)
-            port_settings = builder.port_setting()
-            port_settings.blocked = builder.blocked(False)
-            update_spec = builder.port_config_spec(
+            port_settings = builder.port_setting(blocked=builder.blocked(False))
+            update_spec = builder.port_config_spec(port_info.key,
                 port_info.config.configVersion, port_settings, name=port_name)
-            update_spec.key = port_info.key
             update_task = self.connection.invoke_api(
                 self.connection.vim, 'ReconfigureDVPort_Task',
                 self._dvs, port=[update_spec])
@@ -192,9 +188,8 @@ class DVSController(object):
         try:
             port_info = self.get_port_info(port)
             builder = SpecBuilder(self.connection.vim.client.factory)
-            update_spec = builder.port_config_spec(
+            update_spec = builder.port_config_spec(port_info.key,
                 port_info.config.configVersion, name='')
-            update_spec.key = port_info.key
             #setting = builder.port_setting()
             #setting.filterPolicy = builder.filter_policy([])
             #update_spec.setting = setting
@@ -213,13 +208,9 @@ class DVSController(object):
 
     def _build_pg_create_spec(self, name, vlan_tag, blocked):
         builder = SpecBuilder(self.connection.vim.client.factory)
-        port_setting = builder.port_setting()
-
-        port_setting.vlan = builder.vlan(vlan_tag)
-        port_setting.blocked = builder.blocked(blocked)
-
-        port_setting.filterPolicy = builder.filter_policy([])
-
+        port_setting = builder.port_setting(vlan=builder.vlan(vlan_tag),
+                                            blocked=builder.blocked(blocked),
+                                            filter_policy=builder.filter_policy([]))
         pg = builder.pg_config(port_setting)
         pg.name = name
         pg.numPorts = 0
@@ -441,23 +432,40 @@ class SpecBuilder(object):
         spec.policy = policy
         return spec
 
-    def port_config_spec(self, version=None, setting=None, name=None):
+    def port_config_spec(self, key=None, version=None, setting=None, name=None, description=None):
         spec = self.factory.create('ns0:DVPortConfigSpec')
+        spec.operation = 'edit'
+
+        if key:
+            spec.key = key
+
         if version:
             spec.configVersion = version
-        spec.operation = 'edit'
+
         if setting:
             spec.setting = setting
 
         if name is not None:
             spec.name = name
+
+        if description is not None:
+            spec.description = description
+
         return spec
 
-    def port_lookup_criteria(self):
-        return self.factory.create('ns0:DistributedVirtualSwitchPortCriteria')
+    def port_setting(self, blocked=None, filter_policy=None, vlan=None):
+        port_setting = self.factory.create('ns0:VMwareDVSPortSetting')
 
-    def port_setting(self):
-        return self.factory.create('ns0:VMwareDVSPortSetting')
+        if blocked:
+            port_setting.blocked = blocked
+
+        if filter_policy:
+            port_setting.filterPolicy = filter_policy
+
+        if vlan:
+            port_setting.vlan = vlan
+
+        return port_setting
 
     def filter_policy(self, rules):
         filter_policy = self.factory.create('ns0:DvsFilterPolicy')

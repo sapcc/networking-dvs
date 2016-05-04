@@ -303,10 +303,8 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules):
         seq += 10
 
     filter_policy = builder.filter_policy(rules)
-    setting = builder.port_setting()
-    setting.filterPolicy = filter_policy
-    spec = builder.port_config_spec(setting=setting)
-    spec.key = port_key
+    setting = builder.port_setting(filter_policy=filter_policy)
+    spec = builder.port_config_spec(port_key, setting=setting)
     return spec
 
 
