@@ -100,7 +100,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def _dvs_port_to_neutron(port, dvs_port):
         vif_details = port.get('binding:vif_details', {})
         vif_details['dvs_port_key'] = dvs_port.key
-        vif_details['dvs_port_group_key'] = dvs_port.portgroupKey
         vif_details['dvs_uuid'] = dvs_port.dvsUuid
         port['binding:vif_details'] = vif_details
 

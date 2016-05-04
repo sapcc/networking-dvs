@@ -148,6 +148,7 @@ class DVSController(object):
             self._dvs, port=update_specs)
 
     def update_ports(self, update_specs):
+        LOG.debug("Update Ports:\n{} {}\n".format(update_specs[0].setting.filterPolicy.inherited, sorted([spec.key for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         return self.connection.wait_for_task(update_task) # -> May raise DvsOperationBulkFault, when host is down
 

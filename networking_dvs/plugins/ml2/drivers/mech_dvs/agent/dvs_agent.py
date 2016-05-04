@@ -28,7 +28,6 @@ eventlet.monkey_patch()
 import oslo_messaging
 from oslo_log import log as logging
 from oslo_service import loopingcall
-from oslo_vmware.exceptions import VMwareDriverException
 
 import neutron.context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
@@ -37,7 +36,7 @@ from neutron.i18n import _LI, _LW, _LE
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
 from networking_dvs.common import constants as dvs_constants, config
-from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vmware_util
+from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 from networking_dvs.common.util import dict_merge
 
 LOG = logging.getLogger(__name__)
@@ -76,7 +75,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         self.polling_interval = 10
 
-        self.api = vmware_util.VMWareUtil(self.conf.ML2_VMWARE)
+        self.api = vcenter_util.VCenter(self.conf.ML2_VMWARE)
 
         self.enable_security_groups = self.conf.get('SECURITYGROUP', {}).get('enable_security_group', False)
         # Security group agent support
@@ -227,8 +226,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def _bind_ports(self, unbound_ports):
         ports_up, ports_down = self.api.bind_ports(unbound_ports)
-        for port in ports_up:
-            port["current_segmentation_id"] = port['segmentation_id']
 
         port_up_ids = [pi["port_id"] for pi in ports_up]
         port_down_ids = [pi["port_id"] for pi in ports_down]
@@ -280,11 +277,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         ports_to_bind = []
         for port in ports:
+            port_desc = port['port_desc']
+            # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
+            # or vms not managed by openstack
             if not ("port_id" in port and 'segmentation_id' in port):
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
                 ports.remove(port)
-            elif port.get("current_segmentation_id", -1) != port['segmentation_id'] or \
-                            port.get("current_state_up", True) != port.get("admin_state_up", True):
+            elif port_desc.vlan_id != port['segmentation_id'] or \
+                            port_desc.link_up != port.get("admin_state_up", True):
                 ports_to_bind.append(port)
 
         if self.unbound_ports:
@@ -301,7 +301,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             ports_up, ports_down = self._bind_ports(ports_to_bind)
             for port in ports_down:
                 port_id = port["port_id"]
-                # updated_ports[port_id] = port If we update it, it will trigger a security group update, which will conflict with a subsequent configuring
+                # Updating the port will trigger a security group update conflicting with a subsequent configuration
+                # updated_ports[port_id] = port
                 self.unbound_ports[port_id] = port
             for port in ports_up:
                 port_id = port["port_id"]
