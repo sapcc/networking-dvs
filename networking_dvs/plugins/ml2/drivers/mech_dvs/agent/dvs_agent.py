@@ -84,7 +84,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
                                                          self.sg_plugin_rpc,
                                                          local_vlan_map=None,
-                                                         integration_bridge=self.api.session(), # Passed on to FireWall Driver
+                                                         integration_bridge=self.api, # Passed on to FireWall Driver
                                                          defer_refresh_firewall=True)
 
         self.run_daemon_loop = True
@@ -280,10 +280,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         ports_to_bind = []
         for port in ports:
-            if not ("port_id" in port and 'current_segmentation_id' in port and 'segmentation_id' in port):
+            if not ("port_id" in port and 'segmentation_id' in port):
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
                 ports.remove(port)
-            elif port["current_segmentation_id"] != port['segmentation_id'] or \
+            elif port.get("current_segmentation_id", -1) != port['segmentation_id'] or \
                             port.get("current_state_up", True) != port.get("admin_state_up", True):
                 ports_to_bind.append(port)
 

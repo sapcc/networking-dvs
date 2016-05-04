@@ -35,6 +35,7 @@ class DVSController(object):
 
     def __init__(self, dvs_name, connection):
         self.connection = connection
+        self._uuid = None
         try:
             self.dvs_name = dvs_name
             self._dvs, self._datacenter = self._get_dvs(dvs_name, connection)
@@ -42,6 +43,13 @@ class DVSController(object):
             self._blocked_ports = set()
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
+
+    @property
+    def uuid(self):
+        if self._uuid:
+            return self._uuid
+        self._uuid = self._uuid = self.connection.invoke_api(vim_util, 'get_object_property', self.connection.vim, self._dvs, 'uuid')
+        return self._uuid
 
     def create_network(self, network, segment):
         name = self._get_net_name(self.dvs_name, network)
@@ -134,6 +142,15 @@ class DVSController(object):
                 else:
                     raise
 
+    def submit_update_ports(self, update_specs):
+        return self.connection.invoke_api(
+            self.connection.vim, 'ReconfigureDVPort_Task',
+            self._dvs, port=update_specs)
+
+    def update_ports(self, update_specs):
+        update_task = self.submit_update_ports(update_specs)
+        return self.connection.wait_for_task(update_task) # -> May raise DvsOperationBulkFault, when host is down
+
     def switch_port_blocked_state(self, port):
         try:
             port_info = self.get_port_info(port)
@@ -143,10 +160,7 @@ class DVSController(object):
 
             update_spec = builder.port_config_spec(port_info.key,
                 port_info.config.configVersion, port_settings)
-            update_task = self.connection.invoke_api(
-                self.connection.vim, 'ReconfigureDVPort_Task',
-                self._dvs, port=[update_spec])
-            self.connection.wait_for_task(update_task)
+            self.update_ports([update_spec])
         except exceptions.PortNotFound:
             LOG.debug("Port %s was not found. Nothing to block." % port['id'])
         except vmware_exceptions.VimException as e:
@@ -176,10 +190,7 @@ class DVSController(object):
             port_settings = builder.port_setting(blocked=builder.blocked(False))
             update_spec = builder.port_config_spec(port_info.key,
                 port_info.config.configVersion, port_settings, name=port_name)
-            update_task = self.connection.invoke_api(
-                self.connection.vim, 'ReconfigureDVPort_Task',
-                self._dvs, port=[update_spec])
-            self.connection.wait_for_task(update_task)
+            self.update_ports([update_spec])
             return port_info.key
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
@@ -194,10 +205,7 @@ class DVSController(object):
             #setting.filterPolicy = builder.filter_policy([])
             #update_spec.setting = setting
             update_spec.operation = 'remove'
-            update_task = self.connection.invoke_api(
-                self.connection.vim, 'ReconfigureDVPort_Task',
-                self._dvs, port=[update_spec])
-            self.connection.wait_for_task(update_task)
+            self.update_ports([update_spec])
         except exceptions.PortNotFound:
             LOG.debug("Port %s was not found. Nothing to delete." % port['id'])
         except vmware_exceptions.VimException as e:
@@ -331,7 +339,7 @@ class DVSController(object):
             if (port_key not in connected_port_keys and
                     port_key not in self._blocked_ports):
                 self._blocked_ports.add(port_key)
-                return self._get_port_info_by_portkey(port_key)
+                return self.get_port_info_by_portkey(port_key)
         raise exceptions.UnboundPortNotFound()
 
     def _lookup_unbound_port_old(self, port_group):
@@ -363,12 +371,12 @@ class DVSController(object):
     def get_port_info(self, port):
         key = port.get('binding:vif_details', {}).get('dvs_port_key')
         if key is not None:
-            port_info = self._get_port_info_by_portkey(key)
+            port_info = self.get_port_info_by_portkey(key)
         else:
             port_info = self._get_port_info_by_name(port['id'])
         return port_info
 
-    def _get_port_info_by_portkey(self, port_key):
+    def get_port_info_by_portkey(self, port_key):
         """pg - ManagedObjectReference of Port Group"""
         builder = SpecBuilder(self.connection.vim.client.factory)
         criteria = builder.port_criteria(port_key=port_key)
@@ -378,7 +386,11 @@ class DVSController(object):
             self._dvs, criteria=criteria)
         if not port_info:
             raise exceptions.PortNotFound(id=port_key)
-        return port_info[0]
+
+        if hasattr(port_key, '__iter__'):
+            return port_info
+        else:
+            return port_info[0]
 
     def _get_port_info_by_name(self, name, port_list=None):
         if port_list is None:
@@ -549,7 +561,7 @@ def create_port_map(dvs_list, connect_flag=True):
 
 def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
     for dvs in dvs_list:
-        port = dvs._get_port_info_by_portkey(port_key)
+        port = dvs.get_port_info_by_portkey(port_key)
         if port:
             if port.config.name == port_id:
                 return dvs, port

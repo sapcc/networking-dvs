@@ -19,12 +19,12 @@ from collections import defaultdict
 from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
-from oslo_vmware import exceptions, vim_util, api as vmwareapi
+from oslo_vmware import vim_util, api as vmwareapi
 
-from networking_dvs.common import config
+from networking_dvs.common import config as dvs_config
 from networking_dvs.utils import dvs_util
 
-CONF = config.CONF
+CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
 
@@ -53,78 +53,56 @@ class SpecBuilder(dvs_util.SpecBuilder):
         return wait_options
 
 
-class ResourceNotFoundException(exceptions.VimException):
-    """Thrown when a resource can not be found."""
-    pass
-
-
-def _get_object_by_type(results, type_value):
-    """Get object by type.
-
-    Get the desired object from the given objects
-    result by the given type.
-    """
-    return [obj for obj in results
-            if obj._type == type_value]
-
-
 class VMWareUtil():
     def __init__(self, config=None):
         config = config or CONF.ML2_VMWARE
+
         self.connection = None
         self._create_session(config)
+
+        self.networking_map = dvs_util.create_network_map_from_config(config, self.connection)
+        self._uuid_map = {}
+        for dvs in six.itervalues(self.networking_map):
+            self._uuid_map[dvs.uuid] = dvs
+
         self._version = None
         self._property_collector = None
 
-        self._dvs_name = config.dv_switch
-
-        self._dvs_ref = self._get_dvs(self._dvs_name)
-        self._dvs_uuid = self.connection.invoke_api(vim_util, 'get_object_property', self.connection.vim, self._dvs_ref,
-                                                    'uuid')
-
-        LOG.info(_LI("Using switch {} ({})".format(self._dvs_name, self._dvs_uuid)))
-
-    def session(self):
-        return self.connection
-
     @dvs_util.wrap_retry
     def bind_ports(self, port_info):
-        specs = []
+        specs_by_switch = defaultdict(list)
         ports_up = []
         ports_down = []
 
         port_for_key = {}
 
-        builder = self.spec_builder()
+        builder = SpecBuilder(self.connection.vim.client.factory)
 
         for pi in port_info:
-            port_key = pi["port"]["binding:vif_details"]["dvs_port_key"]
+            vif_details = pi["port"]["binding:vif_details"]
+            switch_uuid = vif_details["dvs_uuid"]
+            specs = specs_by_switch[switch_uuid]
 
-            if port_key in port_for_key:
+            port_key = vif_details["dvs_port_key"]
+
+            if (switch_uuid, port_key) in port_for_key:
                 LOG.error("Duplicate port key {} matching port {} and {}".format(port_key, pi["port_id"],
-                                                                                 port_for_key[port_key]["port_id"]))
+                                                                                 port_for_key[(switch_uuid, port_key)]["port_id"]))
 
-            port_for_key[port_key] = pi
+            port_for_key[(switch_uuid, port_key)] = pi
             if pi["network_type"] == "vlan":
                 specs.append(builder.neutron_to_port_config_spec(pi))
             else:
                 ports_down.append(pi)
                 LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), pi["port_id"])
 
-        iterations = 1
-        while specs and iterations > 0:
-            task = self.connection.invoke_api(self.connection.vim,
-                                              "ReconfigureDVPort_Task",
-                                              self._dvs_ref, port=specs)
-            result = self.connection.wait_for_task(task)
+        for switch_uuid, specs in six.iteritems(specs_by_switch):
+            dvs = self.get_dvs_by_uuid(switch_uuid)
+            result = dvs.update_ports(specs)
 
             if result.state == "success":
                 port_keys = [str(spec.key) for spec in specs]
-
-                vim = self.connection.vim
-
-                criteria = builder.port_criteria(port_keys)
-                dv_ports = self.connection.invoke_api(vim, "FetchDVPorts", self._dvs_ref, criteria=criteria)
+                dv_ports = dvs.get_port_info_by_portkey(port_keys)
 
                 # Filter
                 port_keys_down = set([str(p.key) for p in dv_ports
@@ -138,20 +116,21 @@ class VMWareUtil():
                 for spec in specs:
                     port_key = spec.key
                     if port_key in port_keys_up:
-                        pi = port_for_key[port_key]
+                        pi = port_for_key[(switch_uuid, port_key)]
                         ports_up.append(pi)
                         specs.remove(spec)
 
-            iterations -= 1
-
-        for spec in specs:
-            ports_down.append(port_for_key[spec.key])
+            for spec in specs:
+                ports_down.append(port_for_key[(switch_uuid, spec.key)])
 
         return ports_up, ports_down
 
+    def get_dvs_by_uuid(self, uuid):
+        return self._uuid_map[uuid]
+
     def get_new_ports(self, _=True):
         vim = self.connection.vim
-        builder = self.spec_builder()
+        builder = SpecBuilder(self.connection.vim.client.factory)
         wait_options = builder.wait_options(1, 50)
 
         results = {}
@@ -184,29 +163,28 @@ class VMWareUtil():
                 self._version = result.version
             finished = not result or not hasattr(result, 'truncated') or not result.truncated
 
-        reordered = defaultdict(dict)
+        ports_by_switch_and_key = defaultdict(dict)
         for port in six.itervalues(results):
             vif = port['port']['binding:vif_details']
-            reordered[vif['dvs_uuid']][vif['dvs_port_key']] = port
+            ports_by_switch_and_key[vif['dvs_uuid']][vif['dvs_port_key']] = port
 
-        for switch_uuid, port_map in six.iteritems(reordered):
-            if switch_uuid == self._dvs_uuid:
-                port_keys = port_map.keys()  # View doesn't work
-                criteria = builder.port_criteria(port_keys)
-                dv_ports = self.connection.invoke_api(self.connection.vim, "FetchDVPorts",
-                                                      self._dvs_ref, criteria=criteria)
-                for p in dv_ports:
-                    if hasattr(p, "config") \
-                            and hasattr(p.config, "setting") \
-                            and hasattr(p.config.setting, "vlan") \
-                            and p.config.setting.vlan.vlanId:
-                        segmentation_id = p.config.setting.vlan.vlanId
-                        port = port_map[p.key]
-                        port['current_segmentation_id'] = segmentation_id
-                        if hasattr(p, "state") \
-                                and hasattr(p.state, "runtimeInfo") \
-                                and hasattr(p.state.runtimeInfo, "linkUp"):
-                            port['current_state_up'] = p.state.runtimeInfo.linkUp
+        for switch_uuid, ports_by_key in six.iteritems(ports_by_switch_and_key):
+            dvs = self.get_dvs_by_uuid(switch_uuid)
+
+            port_keys = list(six.iterkeys(ports_by_key))  # View is not sufficient
+            dv_ports = dvs.get_port_info_by_portkey(port_keys)
+            for p in dv_ports:
+                if hasattr(p, "config") \
+                        and hasattr(p.config, "setting") \
+                        and hasattr(p.config.setting, "vlan") \
+                        and p.config.setting.vlan.vlanId:
+                    segmentation_id = p.config.setting.vlan.vlanId
+                    port = ports_by_key[p.key]
+                    port['current_segmentation_id'] = segmentation_id
+                    if hasattr(p, "state") \
+                            and hasattr(p.state, "runtimeInfo") \
+                            and hasattr(p.state.runtimeInfo, "linkUp"):
+                        port['current_state_up'] = p.state.runtimeInfo.linkUp
 
         return results
 
@@ -224,52 +202,6 @@ class VMWareUtil():
             **kwargs)
 
         atexit.register(self.connection.logout)
-
-    def spec_builder(self):
-        return SpecBuilder(self.connection.vim.client.factory)
-
-    def _get_datacenter(self):
-        """Get the datacenter reference."""
-        results = self.connection.invoke_api(
-            vim_util, 'get_objects', self.connection.vim,
-            "Datacenter", 100, ["name"])
-        return results.objects[0].obj
-
-    def _get_network_folder(self):
-        """Get the network folder from datacenter."""
-        dc_ref = self._get_datacenter()
-        results = self.connection.invoke_api(
-            vim_util, 'get_object_property', self.connection.vim,
-            dc_ref, "networkFolder")
-        return results
-
-    def _get_dvs(self, dvs_name):
-        """Get the dvs by name"""
-        net_folder = self._get_network_folder()
-        results = self.connection.invoke_api(
-            vim_util, 'get_object_property', self.connection.vim,
-            net_folder, "childEntity")
-        networks = results.ManagedObjectReference
-        dvswitches = _get_object_by_type(networks,
-                                         "VmwareDistributedVirtualSwitch")
-        dvs_ref = None
-        for dvs in dvswitches:
-            name = self.connection.invoke_api(
-                vim_util, 'get_object_property',
-                self.connection.vim, dvs,
-                "name")
-            if name == dvs_name:
-                dvs_ref = dvs
-                break
-
-        if not dvs_ref:
-            raise ResourceNotFoundException(_("Distributed Virtual Switch "
-                                              "%s not found!") % dvs_name)
-        else:
-            LOG.info(_LI("Got distributed virtual switch by name %s."),
-                     dvs_name)
-
-        return dvs_ref
 
     def _get_property_collector(self):
         if self._property_collector:

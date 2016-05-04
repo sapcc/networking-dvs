@@ -249,13 +249,7 @@ def update_port_rules(dvs, ports):
         port_config_list = build_port_rules(builder, ports, hashed_rules)
 
         if port_config_list:
-            task = dvs.connection.invoke_api(
-                dvs.connection.vim,
-                'ReconfigureDVPort_Task',
-                dvs._dvs,
-                port=port_config_list
-            )
-            return dvs.connection.wait_for_task(task) # -> raises DvsOperationBulkFault
+            return dvs.update_ports(port_config_list)
     except vmware_exceptions.VimException as e:
         if 'The object or item referred to could not be found' in str(e):
             pass
