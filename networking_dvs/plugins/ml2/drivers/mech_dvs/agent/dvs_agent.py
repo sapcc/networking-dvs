@@ -15,7 +15,6 @@
 #    under the License.
 
 
-
 import collections
 import signal
 import six
@@ -81,10 +80,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Security group agent support
         if self.enable_security_groups:
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
-                                                         self.sg_plugin_rpc,
-                                                         local_vlan_map=None,
-                                                         integration_bridge=self.api, # Passed on to FireWall Driver
-                                                         defer_refresh_firewall=True)
+                                                        self.sg_plugin_rpc,
+                                                        local_vlan_map=None,
+                                                        integration_bridge=self.api,  # Passed on to FireWall Driver
+                                                        defer_refresh_firewall=True)
 
         self.run_daemon_loop = True
         self.iter_num = 0
@@ -106,7 +105,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def port_update(self, context, **kwargs):
         port = kwargs.get('port')
         port_id = port['id']
-        if port_id in self.known_ports and not port_id in self.deleted_ports: # Avoid updating a port, which has not been created yet
+        if port_id in self.known_ports and not port_id in self.deleted_ports:  # Avoid updating a port, which has not been created yet
             self.updated_ports[port_id] = port
         LOG.debug("port_update message processed for port {}".format(port_id))
 
@@ -208,13 +207,16 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             ports_by_mac = self.api.get_new_ports()
             macs = six.viewkeys(ports_by_mac)
             neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
-                                                                       host=self.conf.host)
+                                                                     host=self.conf.host)
 
             for neutron_info in neutron_ports:
                 if neutron_info:
-                    port_info = ports_by_mac.get(neutron_info.get("mac_address", None), None)
+                    mac = neutron_info.get("device", None)
+                    port_info = ports_by_mac.get(mac, None)
                     if port_info:
-                        port_info["port"]["id"] = neutron_info["port_id"]
+                        port_id = neutron_info.get("port_id", None)
+                        if port_id:
+                            port_info["port"]["id"] = port_id
                         dict_merge(port_info, neutron_info)
 
             LOG.debug(_LI("Scan {} ports completed in {} seconds".format(len(neutron_ports), time.clock() - start)))
@@ -223,21 +225,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
             LOG.exception(_LE("Failed to get ports via RPC"))
             return []
-
-    def _bind_ports(self, unbound_ports):
-        ports_up, ports_down = self.api.bind_ports(unbound_ports)
-
-        port_up_ids = [pi["port_id"] for pi in ports_up]
-        port_down_ids = [pi["port_id"] for pi in ports_down]
-        LOG.debug("Updating ports up {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
-                                                                        self.agent_id, self.conf.host))
-
-        result = self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id,
-                                                    self.conf.host)
-
-        LOG.debug("Updated ports result {}".format(result))
-        return ports_up, ports_down
-
 
     def loop_count_and_wait(self, start_time, port_stats):
         # sleep till end of polling interval
@@ -267,24 +254,35 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             # trigger the firewall update and clear the deleted ports list
             if self.sg_agent:
                 self.sg_agent.remove_devices_filter(deleted_ports)
-            self.deleted_ports = self.deleted_ports - deleted_ports # This way we miss fewer concurrent update
+            self.deleted_ports = self.deleted_ports - deleted_ports  # This way we miss fewer concurrent update
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
                 self.unbound_ports.pop(port_id, None)
 
-        # Get current ports known on the VMWare integration bridge
-        ports = self._scan_ports()
+        # Get new ports on the VMWare integration bridge
+        found_ports = self._scan_ports()
 
+        port_up_ids = []
+        port_down_ids = []
         ports_to_bind = []
-        for port in ports:
+
+        for port in found_ports:
             port_desc = port['port_desc']
             # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
             # or vms not managed by openstack
-            if not ("port_id" in port and 'segmentation_id' in port):
+            port_id = port.get('port_id', None)
+            segmentation_id = port.get('segmentation_id', None)
+            if not port_id or not segmentation_id:
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
-                ports.remove(port)
-            elif port_desc.vlan_id != port['segmentation_id'] or \
-                            port_desc.link_up != port.get("admin_state_up", True):
+            elif port_desc.vlan_id == segmentation_id and \
+                            port_desc.link_up == port.get("admin_state_up", True):
+                # The port is already in the expected state
+                # Since we do not know if neutron knows about it, we still send an update
+                if port_desc.link_up:
+                    port_up_ids.append(port_id)
+                else:
+                    port_down_ids.append(port_id)
+            else:
                 ports_to_bind.append(port)
 
         if self.unbound_ports:
@@ -297,21 +295,28 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         updated_ports = self.updated_ports.copy()
 
         if ports_to_bind:
-            # LOG.debug("Ports to bind: {}".format([ port["port_id"] for port in ports_to_bind]))
-            ports_up, ports_down = self._bind_ports(ports_to_bind)
+            LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
+            ports_up, ports_down = self.api.bind_ports(ports_to_bind)
             for port in ports_down:
                 port_id = port["port_id"]
+                port_down_ids.append(port_id)
                 # Updating the port will trigger a security group update conflicting with a subsequent configuration
                 # updated_ports[port_id] = port
                 self.unbound_ports[port_id] = port
             for port in ports_up:
                 port_id = port["port_id"]
+                port_up_ids.append(port_id)
                 updated_ports[port_id] = port
                 self.unbound_ports.pop(port_id, None)
 
+        if port_up_ids or port_down_ids:
+            LOG.debug("Update {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
+                                                              self.agent_id, self.conf.host))
+            self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
-        for port in ports:
+        for port in found_ports:
             port_id = port.get("port_id", None)
             if port_id and not port_id in known_ids:
                 added_ports.add(port_id)
@@ -324,7 +329,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         if self.sg_agent and (updated_ports or added_ports):
             # LOG.debug("Calling setup_port_filters")
             added_ports -= six.viewkeys(self.unbound_ports)
-            updated_ports =  six.viewkeys(updated_ports) - added_ports
+            updated_ports = six.viewkeys(updated_ports) - added_ports
             self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
         return {
@@ -336,7 +341,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def rpc_loop(self):
         while self._check_and_handle_signal():
             start = time.clock()
-            port_stats = {'regular': self.process_ports() }
+            port_stats = {'regular': self.process_ports()}
             self.loop_count_and_wait(start, port_stats)
 
     def daemon_loop(self):

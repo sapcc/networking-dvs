@@ -52,18 +52,18 @@ class _DVSPortDesc(object):
 
 
 class SpecBuilder(dvs_util.SpecBuilder):
-    def neutron_to_port_config_spec(self, port_info):
-        setting = self.port_setting(vlan=self.vlan(port_info["segmentation_id"]),
-                                    blocked=self.blocked(not port_info["admin_state_up"]),
+    def neutron_to_port_config_spec(self, port):
+        port_desc = port['port_desc']
+        setting = self.port_setting(vlan=self.vlan(port["segmentation_id"]),
+                                    blocked=self.blocked(not port["admin_state_up"]),
                                     filter_policy=self.filter_policy(None)
                                     )
 
-        return self.port_config_spec(  # version=port_info["config_version"],
-            key=port_info["port"]["binding:vif_details"]["dvs_port_key"],
-            setting=setting,
-            name=port_info["port_id"],
-            description="Neutron port {} for network {}".format(port_info["port_id"],
-                                                                port_info["network_id"]))
+        return self.port_config_spec(version=port_desc.config_version,
+                                     key=port_desc.port_key,
+                                     setting=setting,
+                                     name=port["port_id"],
+                                     description="Neutron port for network {}".format(port["network_id"]))
 
     def wait_options(self, max_wait_seconds=None, max_object_updates=None):
         wait_options = self.factory.create('ns0:WaitOptions')
@@ -101,7 +101,6 @@ class VCenter(object):
         # TODO validate connectionCookie, so we still have the same instance behind that portKey
         port_desc = port['port_desc']
         port_desc.config_version = port_info.config.configVersion
-        LOG.debug("Port: {} {}".format(port_info.key, port_info.config.configVersion))
         if hasattr(port_info.config, "setting") \
                 and hasattr(port_info.config.setting, "vlan") \
                 and port_info.config.setting.vlan.vlanId:
@@ -160,7 +159,7 @@ class VCenter(object):
                 if port["admin_state_up"]:
                     if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
                         ports_up.append(port)
-                else: # Port down requested
+                else:  # Port down requested
                     if not port_desc.link_up:
                         ports_down.append(port)
 
@@ -172,7 +171,7 @@ class VCenter(object):
     @dvs_util.wrap_retry
     def get_new_ports(self):
         vim = self.connection.vim
-        builder = SpecBuilder(self.connection.vim.client.factory)
+        builder = SpecBuilder(vim.client.factory)
         wait_options = builder.wait_options(1, 200)
 
         ports_by_mac = {}
@@ -195,10 +194,10 @@ class VCenter(object):
             port_info = dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key)))  # View is not sufficient
             for pi in port_info:
                 port = ports_by_key[pi.key]
-                # cc = port['port']['binding:vif_details']['dvs_connection_cookie']
-                # if pi.connectionCookie != cc:
-                #    LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
-                #                format(pi.connectionCookie, cc))
+                port_desc = port['port_desc']
+                if hasattr(port_desc, 'connectionCookie') and pi.connectionCookie != port_desc.connection_cookie:
+                    LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
+                                format(pi.connectionCookie, port_desc.connection_cookie))
 
                 VCenter.update_port_from_port_info(port, pi)
 
@@ -221,10 +220,10 @@ class VCenter(object):
                 if "assign" == change.op:
                     for v in change.val[0]:
                         if hasattr(v, 'macAddress'):
-                            dvs = self.get_dvs_by_uuid(port.switchUuid)
-                            mac_address = v.macAddress
                             port = v.backing.port
+                            mac_address = v.macAddress
                             connectable = v.connectable if hasattr(v, "connectable") else None
+                            dvs = self.get_dvs_by_uuid(port.switchUuid)
 
                             port_desc = _DVSPortDesc(
                                 mac_address=mac_address,
