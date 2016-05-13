@@ -87,17 +87,17 @@ class VCenter(object):
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortDesc
         self._hardware_map = defaultdict(dict)
+        self.uuid_port_map = {}
 
-        self.networking_map = dvs_util.create_network_map_from_config(config, self.connection)
-        self._uuid_map = {}
-        for dvs in six.itervalues(self.networking_map):
-            self._uuid_map[dvs.uuid] = dvs
+        self._uuid_dvs_map = {}
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
+            self._uuid_dvs_map[dvs.uuid] = dvs
 
         self._version = None
         self._property_collector = None
 
     @staticmethod
-    def update_port_from_port_info(port, port_info):
+    def update_port_desc(port, port_info):
         # TODO validate connectionCookie, so we still have the same instance behind that portKey
         port_desc = port['port_desc']
         port_desc.config_version = port_info.config.configVersion
@@ -112,7 +112,7 @@ class VCenter(object):
             port_desc.link_up = port_info.state.runtimeInfo.linkUp
 
     @staticmethod
-    def _ports_by_switch_and_key(ports):
+    def ports_by_switch_and_key(ports):
         ports_by_switch_and_key = defaultdict(dict)
         for port in ports:
             port_desc = port['port_desc']
@@ -125,7 +125,7 @@ class VCenter(object):
         ports_up = []
         ports_down = []
 
-        ports_by_switch_and_key = VCenter._ports_by_switch_and_key(ports)
+        ports_by_switch_and_key = VCenter.ports_by_switch_and_key(ports)
 
         builder = SpecBuilder(self.connection.vim.client.factory)
 
@@ -154,7 +154,7 @@ class VCenter(object):
             for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
                 port_key = str(port_info.key)
                 port = ports_by_key[port_key]
-                VCenter.update_port_from_port_info(port, port_info)
+                VCenter.update_port_desc(port, port_info)
                 port_desc = port['port_desc']
                 if port["admin_state_up"]:
                     if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
@@ -166,7 +166,10 @@ class VCenter(object):
         return ports_up, ports_down
 
     def get_dvs_by_uuid(self, uuid):
-        return self._uuid_map[uuid]
+        return self._uuid_dvs_map[uuid]
+
+    def get_port_by_uuid(self, uuid):
+        return self.uuid_port_map.get(uuid, None)
 
     @dvs_util.wrap_retry
     def get_new_ports(self):
@@ -188,7 +191,7 @@ class VCenter(object):
                 self._version = result.version
             finished = not result or not hasattr(result, 'truncated') or not result.truncated
 
-        ports_by_switch_and_key = VCenter._ports_by_switch_and_key(six.itervalues(ports_by_mac))
+        ports_by_switch_and_key = VCenter.ports_by_switch_and_key(six.itervalues(ports_by_mac))
 
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             port_info = dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key)))  # View is not sufficient
@@ -199,13 +202,14 @@ class VCenter(object):
                     LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
                                 format(pi.connectionCookie, port_desc.connection_cookie))
 
-                VCenter.update_port_from_port_info(port, pi)
+                VCenter.update_port_desc(port, pi)
 
         return ports_by_mac
 
     def _handle_removal(self, vm):
-        vm_hw = self._hardware_map.pop(vm, None)
-        # Also remove ports etc
+        vm_hw = self._hardware_map.pop(vm, {})
+        for port in six.itervalues(vm_hw):
+            self.uuid_port_map.pop(port.get('port_id', None), None)
 
     def _handle_virtual_machine(self, ports_by_mac, update):
         vm = update.obj.value  # vmobref (vm-#)
@@ -226,31 +230,38 @@ class VCenter(object):
                             dvs = self.get_dvs_by_uuid(port.switchUuid)
 
                             port_desc = _DVSPortDesc(
-                                mac_address=mac_address,
-                                connected=connectable.connected if connectable else None,
-                                status=str(connectable.status) if connectable else None,
-                                port_key=port.portKey,
-                                port_group_key=port.portgroupKey,
-                                dvs=dvs,
-                                connection_cookie=port.connectionCookie
-                            )
+                                    mac_address=mac_address,
+                                    connected=connectable.connected if connectable else None,
+                                    status=str(connectable.status) if connectable else None,
+                                    port_key=port.portKey,
+                                    port_group_key=port.portgroupKey,
+                                    dvs=dvs,
+                                    connection_cookie=port.connectionCookie)
 
-                            vm_hw[int(v.key)] = port_desc
+                            port = {
+                                'port_desc': port_desc,
+                                'port': {
+                                    'binding:vif_details': {
+                                        'dvs_port_key': port_desc.port_key,
+                                        'dvs_uuid': port_desc.dvs.uuid
+                                    }, 'mac_address': port_desc.mac_address}}
 
-                            VCenter._add_port_by_mac(ports_by_mac, port_desc)
+                            vm_hw[int(v.key)] = port
+                            self._add_port_by_mac(ports_by_mac, port)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vm)
             elif change_name.startswith("config.hardware.device["):
                 id_end = change_name.index("]")
                 device_key = int(change_name[23:id_end])
-                port_desc = vm_hw.get(device_key, None)
-                if port_desc:
+                port = vm_hw.get(device_key, None)
+                if port:
+                    port_desc = port['port_desc']
                     attribute = change_name[id_end + 2:]
                     if "connectable.connected" == attribute:
                         port_desc.connected = change.val
                     elif "connectable.status" == attribute:
                         port_desc.status = change.val
-                    VCenter._add_port_by_mac(ports_by_mac, port_desc)
+                    self._add_port_by_mac(ports_by_mac, port)
             else:
                 print(change)
 
@@ -259,16 +270,10 @@ class VCenter(object):
         else:
             pass
 
-    @staticmethod
-    def _add_port_by_mac(ports_by_mac, port_desc):
-        if port_desc and port_desc.is_connected():
-            ports_by_mac[port_desc.mac_address] = {
-                'port_desc': port_desc,
-                'port': {
-                    'binding:vif_details': {
-                        'dvs_port_key': port_desc.port_key,
-                        'dvs_uuid': port_desc.dvs.uuid
-                    }, 'mac_address': port_desc.mac_address}}
+    def _add_port_by_mac(self, ports_by_mac, port):
+        port_desc = port['port_desc']
+        if port_desc.is_connected():
+            ports_by_mac[port_desc.mac_address] = port
 
     def _create_session(self, config):
         """Create Vcenter Session for API Calling."""
@@ -334,9 +339,6 @@ def main():
         ports = util.get_new_ports()
     print(ports)
     print(w.elapsed())
-
-    while True:
-        util.get_new_ports()
 
 
 if __name__ == "__main__":

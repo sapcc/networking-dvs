@@ -243,6 +243,8 @@ def build_port_rules(builder, ports, hashed_rules = None):
 
 @dvs_util.wrap_retry
 def update_port_rules(dvs, ports):
+    if not ports:
+        return
     try:
         builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
         hashed_rules = {}
@@ -257,7 +259,7 @@ def update_port_rules(dvs, ports):
             raise exceptions.wrap_wmvare_vim_exception(e)
 
 
-def port_configuration(builder, port_key, sg_rules, hashed_rules):
+def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None):
     sg_rules = sg_rules or []
     rules = []
     seq = 0
@@ -298,7 +300,7 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules):
 
     filter_policy = builder.filter_policy(rules)
     setting = builder.port_setting(filter_policy=filter_policy)
-    spec = builder.port_config_spec(port_key, setting=setting)
+    spec = builder.port_config_spec(port_key, setting=setting, version=version)
     return spec
 
 

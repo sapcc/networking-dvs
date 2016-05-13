@@ -124,7 +124,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             # notifications could arrive out of order, if the port is deleted
             # we don't want to update it anymore
             if port_id not in self.deleted_ports:
-                self.updated_ports[port_id] = None
+                port = self.known_ports.get(port_id, None)
+                if port:
+                    self.updated_ports[port_id] = port
         LOG.debug("Agent network_update for network "
                   "%(network_id)s, with ports: %(ports)s",
                   {'network_id': network_id,
@@ -132,12 +134,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def network_delete(self, context, **kwargs):
         LOG.debug(_LI("Agent network_delete"))
-
-    def _clean_network_ports(self, port_id):
-        for port_set in six.itervalues(self.network_ports):
-            if port_id in port_set:
-                port_set.remove(port_id)
-                break
 
     def setup_rpc(self):
         self.agent_id = 'dvs-agent-%s' % self.conf.host
@@ -217,7 +213,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                         port_id = neutron_info.get("port_id", None)
                         if port_id:
                             port_info["port"]["id"] = port_id
-                        dict_merge(port_info, neutron_info)
+                            dict_merge(port_info, neutron_info)
+                            self.api.uuid_port_map[port_id] = port_info
 
             LOG.debug(_LI("Scan {} ports completed in {} seconds".format(len(neutron_ports), time.clock() - start)))
 
