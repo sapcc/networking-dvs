@@ -17,8 +17,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
         self._defer_apply = False
-        self._ports_by_device_id = {} # Because the interface expects it that way
-        self._port_id_to_device_id = {}
+        self._ports_by_device_id = {}  # Because the interface expects it that way
 
     def prepare_port_filter(self, ports):
         self._process_port_filter(ports)
@@ -78,11 +77,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for port_id in port_ids:
             port = self.v_center.uuid_port_map.get(port_id, None)
             if port:
-                ports.append(ports)
-            else:
-                device_id = self._port_id_to_device_id.pop(port_id, None)
-                if device_id:
-                    self._ports_by_device_id.pop(device_id, None)
+                ports.append(port)
+
+            self._ports_by_device_id.pop(port_id, None)
 
         self._apply_sg_rules_for_port(ports)
 
@@ -96,4 +93,5 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 ports_by_switch[port_desc.dvs].append(port)
 
         for dvs, port_list in six.iteritems(ports_by_switch):
+            print("DVS {} {}".format(dvs.uuid, [port['id'] for port in port_list]))
             sg_util.update_port_rules(dvs, port_list)

@@ -233,10 +233,17 @@ def build_port_rules(builder, ports, hashed_rules = None):
     port_config_list = []
     hashed_rules = hashed_rules or {}
     for port in ports:
-        key = port.get('binding:vif_details', {}).get('dvs_port_key')
+        port_desc = port.get('port_desc', None)
+        if port_desc:
+            key = port_desc.port_key
+            version = port_desc.config_version
+        else:
+            key = port.get('binding:vif_details', {}).get('dvs_port_key')
+            version = None
+
         if key:
             port_config = port_configuration(
-                builder, key, port['security_group_rules'], hashed_rules)
+                builder, key, port['security_group_rules'], hashed_rules, version=version)
             port_config_list.append(port_config)
     return port_config_list
 
@@ -245,19 +252,41 @@ def build_port_rules(builder, ports, hashed_rules = None):
 def update_port_rules(dvs, ports):
     if not ports:
         return
-    try:
-        builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
-        hashed_rules = {}
-        port_config_list = build_port_rules(builder, ports, hashed_rules)
+    for i in range(5):
+        try:
+            builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
+            hashed_rules = {}
+            port_config_list = build_port_rules(builder, ports, hashed_rules)
 
-        if port_config_list:
-            return dvs.update_ports(port_config_list)
-    except vmware_exceptions.VimException as e:
-        if 'The object or item referred to could not be found' in str(e):
-            pass
-        else:
-            raise exceptions.wrap_wmvare_vim_exception(e)
+            if port_config_list:
+                return dvs.update_ports(port_config_list)
+        except vmware_exceptions.VimException as e:
+            if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
+                print('--------------------------------')
+                ports_by_key = {}
+                for port in ports:
+                    port_desc = port.get('port_desc', None)
+                    if port_desc:
+                        ports_by_key[port_desc.port_key] = port
 
+                # View is not sufficient -> list(iter)
+                for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
+                    port_key = str(port_info.key)
+                    port = ports_by_key[port_key]
+                    port_desc = port['port_desc']
+                    print("{}: {} {}".format(port_key, port_info.connectionCookie, port_desc.connection_cookie))
+                    if port_info.connectionCookie != port_desc.connection_cookie:
+                        LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
+                                    format(port_info.connectionCookie, port_desc.connection_cookie))
+                        ports.remove(port)
+                    else:
+                        port_desc.config_version = port_info.config.configVersion
+                print('--------------------------------')
+                continue
+            if 'The object or item referred to could not be found' in str(e):
+                return
+            else:
+                raise exceptions.wrap_wmvare_vim_exception(e)
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None):
     sg_rules = sg_rules or []

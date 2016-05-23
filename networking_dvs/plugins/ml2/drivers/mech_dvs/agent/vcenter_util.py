@@ -194,15 +194,14 @@ class VCenter(object):
         ports_by_switch_and_key = VCenter.ports_by_switch_and_key(six.itervalues(ports_by_mac))
 
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
-            port_info = dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key)))  # View is not sufficient
-            for pi in port_info:
-                port = ports_by_key[pi.key]
+            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))): # View is not sufficient
+                port = ports_by_key[port_info.key]
                 port_desc = port['port_desc']
-                if hasattr(port_desc, 'connectionCookie') and pi.connectionCookie != port_desc.connection_cookie:
+                if hasattr(port_info, 'connectionCookie') and port_info.connectionCookie != port_desc.connection_cookie:
                     LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
-                                format(pi.connectionCookie, port_desc.connection_cookie))
+                                format(port_info.connectionCookie, port_desc.connection_cookie))
 
-                VCenter.update_port_desc(port, pi)
+                VCenter.update_port_desc(port, port_info)
 
         return ports_by_mac
 
