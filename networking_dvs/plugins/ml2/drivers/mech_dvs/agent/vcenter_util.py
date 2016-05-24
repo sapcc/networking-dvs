@@ -15,10 +15,12 @@
 import atexit
 import six
 from collections import defaultdict
+from datetime import datetime
 
 from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
+from oslo_service import loopingcall
 from oslo_vmware import vim_util, api as vmwareapi
 from oslo_vmware import exceptions as vmware_exceptions
 
@@ -88,6 +90,8 @@ class VCenter(object):
         # e.g vmobrefs -> keys -> _DVSPortDesc
         self._hardware_map = defaultdict(dict)
         self.uuid_port_map = {}
+        self.down_ports = {}
+        self.iteration = 0
 
         self._uuid_dvs_map = {}
         for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
@@ -95,21 +99,26 @@ class VCenter(object):
 
         self._version = None
         self._property_collector = None
+        heartbeat = loopingcall.FixedIntervalLoopingCall(self._poll_down_ports)
+        heartbeat.start(interval=1)
+
+    def _poll_down_ports(self):
+        print("XXX")
+        print("tick")
 
     @staticmethod
     def update_port_desc(port, port_info):
         # TODO validate connectionCookie, so we still have the same instance behind that portKey
         port_desc = port['port_desc']
         port_desc.config_version = port_info.config.configVersion
-        if hasattr(port_info.config, "setting") \
-                and hasattr(port_info.config.setting, "vlan") \
+        if getattr(port_info.config, "setting", None) \
+                and getattr(port_info.config.setting, "vlan", None) \
                 and port_info.config.setting.vlan.vlanId:
             port_desc.vlan_id = port_info.config.setting.vlan.vlanId
 
-        if hasattr(port_info, "state") \
-                and hasattr(port_info.state, "runtimeInfo") \
-                and hasattr(port_info.state.runtimeInfo, "linkUp"):
-            port_desc.link_up = port_info.state.runtimeInfo.linkUp
+        if getattr(port_info, "state", None) \
+                and getattr(port_info.state, "runtimeInfo", None):
+            port_desc.link_up = getattr(port_info.state.runtimeInfo, "linkUp", None)
 
     @staticmethod
     def ports_by_switch_and_key(ports):
@@ -156,6 +165,7 @@ class VCenter(object):
                 port = ports_by_key[port_key]
                 VCenter.update_port_desc(port, port_info)
                 port_desc = port['port_desc']
+
                 if port["admin_state_up"]:
                     if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
                         ports_up.append(port)
@@ -173,46 +183,64 @@ class VCenter(object):
 
     @dvs_util.wrap_retry
     def get_new_ports(self):
+        print('* ' * 60)
         vim = self.connection.vim
         builder = SpecBuilder(vim.client.factory)
-        wait_options = builder.wait_options(1, 200)
+
+        self.iteration += 1
+        wait_options = builder.wait_options(1, 10)
 
         ports_by_mac = {}
 
-        finished = False
-        while not finished:
-            result = self.connection.invoke_api(vim, 'WaitForUpdatesEx', self._get_property_collector(),
-                                                version=self._version, options=wait_options)
-            if result:
-                if result.filterSet and result.filterSet[0].objectSet:
-                    for update in result.filterSet[0].objectSet:
-                        if update.obj._type == 'VirtualMachine':
-                            self._handle_virtual_machine(ports_by_mac, update)
-                self._version = result.version
-            finished = not result or not hasattr(result, 'truncated') or not result.truncated
+        result = self.connection.invoke_api(vim, 'WaitForUpdatesEx', self._get_property_collector(),
+                                            version=self._version, options=wait_options)
+        if result:
+            self._version = result.version
+            if result.filterSet and result.filterSet[0].objectSet:
+                for update in result.filterSet[0].objectSet:
+                    if update.obj._type == 'VirtualMachine':
+                        self._handle_virtual_machine(ports_by_mac, update)
 
         ports_by_switch_and_key = VCenter.ports_by_switch_and_key(six.itervalues(ports_by_mac))
 
+        # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
+        # partly connectet, meaning: the instance is associated, but the link is not quite up yet
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
-            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))): # View is not sufficient
+            keys = list(six.iterkeys(ports_by_key))
+            for port_info in dvs.get_port_info_by_portkey(keys): # View is not sufficient
                 port = ports_by_key[port_info.key]
                 port_desc = port['port_desc']
-                if hasattr(port_info, 'connectionCookie') and port_info.connectionCookie != port_desc.connection_cookie:
+                if getattr(port_info, 'connectionCookie', None) != port_desc.connection_cookie:
                     LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
-                                format(port_info.connectionCookie, port_desc.connection_cookie))
+                                format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie))
+
+                state = getattr(port_info, "state", None)
+                runtime_info = getattr(state, "runtimeInfo", None)
+                if getattr(runtime_info, "linkUp", False):
+                    LOG.error("Port Link Down: {}".format(port_info.key))
 
                 VCenter.update_port_desc(port, port_info)
+
+        for mac_address, something in six.iteritems(self.down_ports):
+            then, port, iteration = something
+            print("{}: {} {}".format(mac_address, self.iteration - iteration, port['port_desc'].port_key))
+
+        print('--' * 60)
 
         return ports_by_mac
 
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
         for port in six.itervalues(vm_hw):
-            self.uuid_port_map.pop(port.get('port_id', None), None)
+            port_id = port.get('port_id', None)
+            mac_address = port['port_desc'].mac_address
+            print("Removed {} {}".format(port_id, mac_address))
+            self.down_ports.pop(mac_address, None)
+            self.uuid_port_map.pop(port_id, None)
 
     def _handle_virtual_machine(self, ports_by_mac, update):
         vm = update.obj.value  # vmobref (vm-#)
-        change_set = update.changeSet if hasattr(update, 'changeSet') else []
+        change_set = getattr(update, 'changeSet', [])
 
         if update.kind != 'leave':
             vm_hw = self._hardware_map[vm]
@@ -222,10 +250,11 @@ class VCenter(object):
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
                     for v in change.val[0]:
-                        if hasattr(v, 'macAddress'):
+                        mac_address = getattr(v, 'macAddress', None)
+                        if mac_address:
                             port = v.backing.port
                             mac_address = v.macAddress
-                            connectable = v.connectable if hasattr(v, "connectable") else None
+                            connectable = getattr(v, "connectable", None)
                             dvs = self.get_dvs_by_uuid(port.switchUuid)
 
                             port_desc = _DVSPortDesc(
@@ -270,9 +299,17 @@ class VCenter(object):
             pass
 
     def _add_port_by_mac(self, ports_by_mac, port):
+        now = datetime.utcnow()
         port_desc = port['port_desc']
+        mac_address = port_desc.mac_address
         if port_desc.is_connected():
-            ports_by_mac[port_desc.mac_address] = port
+            ports_by_mac[mac_address] = port
+            then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
+            if then:
+                print("Port {} {} was down for {} ({})".format(port_desc.port_key, mac_address, (now - then).total_seconds(), (self.iteration - iteration)))
+        elif not port_desc in self.down_ports:
+            print("Port {} {} registered as down: {}".format(port_desc.port_key, mac_address, port_desc))
+            self.down_ports[mac_address] = (now, port, self.iteration)
 
     def _create_session(self, config):
         """Create Vcenter Session for API Calling."""
@@ -338,6 +375,9 @@ def main():
         ports = util.get_new_ports()
     print(ports)
     print(w.elapsed())
+
+    while True:
+        ports = util.get_new_ports()
 
 
 if __name__ == "__main__":

@@ -388,7 +388,7 @@ class DVSController(object):
         if not port_info:
             raise exceptions.PortNotFound(id=port_key)
 
-        if hasattr(port_key, '__iter__'):
+        if getattr(port_key, '__iter__', None):
             return port_info
         else:
             return port_info[0]

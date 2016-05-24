@@ -17,7 +17,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
         self._defer_apply = False
-        self._ports_by_device_id = {}  # Because the interface expects it that way
+        self._ports_by_device_id = {}  # Device-id seems to be the same as port id
 
     def prepare_port_filter(self, ports):
         self._process_port_filter(ports)

@@ -202,21 +202,26 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             start = time.clock()
             ports_by_mac = self.api.get_new_ports()
             macs = six.viewkeys(ports_by_mac)
-            neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
-                                                                     host=self.conf.host)
+            if not macs:
+                LOG.debug(_LI("Scan 0 ports completed in {} seconds".format(time.clock() - start)))
+            else:
+                print("Looking for {} macs".format(len(macs)))
+                neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
+                                                                         host=self.conf.host)
 
-            for neutron_info in neutron_ports:
-                if neutron_info:
-                    mac = neutron_info.get("device", None)
-                    port_info = ports_by_mac.get(mac, None)
-                    if port_info:
-                        port_id = neutron_info.get("port_id", None)
-                        if port_id:
-                            port_info["port"]["id"] = port_id
-                            dict_merge(port_info, neutron_info)
-                            self.api.uuid_port_map[port_id] = port_info
+                for neutron_info in neutron_ports:
+                    if neutron_info:
+                        mac = neutron_info.get("device", None)
+                        port_info = ports_by_mac.get(mac, None)
+                        if port_info:
+                            port_id = neutron_info.get("port_id", None)
+                            if port_id:
+                                port_info["port"]["id"] = port_id
+                                dict_merge(port_info, neutron_info)
+                                self.api.uuid_port_map[port_id] = port_info
 
-            LOG.debug(_LI("Scan {} ports completed in {} seconds".format(len(neutron_ports), time.clock() - start)))
+                LOG.debug(_LI("Scan {} ports completed in {} seconds".format(len(neutron_ports), time.clock() - start)))
+
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
