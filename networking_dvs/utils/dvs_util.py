@@ -497,7 +497,7 @@ class SpecBuilder(object):
         return filter_policy
 
     def port_criteria(self, port_key=None, port_group_key=None,
-                      connected=None):
+                      connected=None, active=None):
         criteria = self.factory.create(
             'ns0:DistributedVirtualSwitchPortCriteria')
         if port_key:
@@ -507,6 +507,8 @@ class SpecBuilder(object):
             criteria.inside = '1'
         if connected:
             criteria.connected = connected
+        if active:
+            criteria.active = active
         return criteria
 
     def vlan(self, vlan_tag):

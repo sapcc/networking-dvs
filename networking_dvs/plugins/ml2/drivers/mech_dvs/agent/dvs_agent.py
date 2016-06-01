@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 import collections
 import signal
 import six
@@ -201,7 +200,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         try:
             start = time.clock()
             ports_by_mac = self.api.get_new_ports()
-            macs = six.viewkeys(ports_by_mac)
+            macs = set(six.iterkeys(ports_by_mac))
             if not macs:
                 LOG.debug(_LI("Scan 0 ports completed in {} seconds".format(time.clock() - start)))
             else:
@@ -212,6 +211,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 for neutron_info in neutron_ports:
                     if neutron_info:
                         mac = neutron_info.get("device", None)
+                        macs.discard(mac)
                         port_info = ports_by_mac.get(mac, None)
                         if port_info:
                             port_id = neutron_info.get("port_id", None)
@@ -220,8 +220,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                 dict_merge(port_info, neutron_info)
                                 self.api.uuid_port_map[port_id] = port_info
 
-                LOG.debug(_LI("Scan {} ports completed in {} seconds".format(len(neutron_ports), time.clock() - start)))
-
+                LOG.debug(_LI("Scan {} ports completed in {} seconds (Missing {})".format(len(neutron_ports), time.clock() - start, len(macs))))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
@@ -366,6 +365,8 @@ def main():
     # Start everything.
     LOG.info(_LI("Agent initialized successfully, now running... "))
     agent.daemon_loop()
+    print("Stopping")
+    agent.api.stop()
 
 
 if __name__ == "__main__":

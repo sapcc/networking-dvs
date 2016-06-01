@@ -275,7 +275,7 @@ def update_port_rules(dvs, ports):
                     port = ports_by_key[port_key]
                     port_desc = port['port_desc']
                     if getattr(port_info, "connectionCookie", None) != port_desc.connection_cookie:
-                        LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
+                        LOG.warning("Different cookie then expected: Got {}, Expected {}".
                                     format(getattr(port_info, "connectionCookie", None), port_desc.connection_cookie))
                         ports.remove(port)
                     else:
@@ -286,6 +286,7 @@ def update_port_rules(dvs, ports):
                 return
             else:
                 raise exceptions.wrap_wmvare_vim_exception(e)
+
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None):
     sg_rules = sg_rules or []

@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 from novaclient import client
 from oslo_config.cfg import NoSuchOptError
 

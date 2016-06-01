@@ -30,11 +30,13 @@ except:
     import multiprocessing.queues as mqp
 
 from networking_dvs.common import config as dvs_config, constants as dvs_const
-from networking_dvs.utils import dvs_util
+from networking_dvs.utils import dvs_util, security_group_utils
+
 import multiprocessing
 
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
+
 
 def _create_session(config):
     """Create Vcenter Session for API Calling."""
@@ -57,7 +59,7 @@ def _create_session(config):
 class _DVSPortDesc(object):
     def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
                  mac_address=None, connection_cookie=None, connected=None, status=None,
-                 config_version=None, vlan_id=None, link_up=None):
+                 config_version=None, vlan_id=None, link_up=None, vm=None):
         self.dvs_uuid = dvs_uuid
         self.port_key = port_key
         self.port_group_key = port_group_key
@@ -77,6 +79,13 @@ class _DVSPortDesc(object):
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__, self.__dict__)
+
+
+class _DVSPortMonitorDesc(_DVSPortDesc):
+    def __init__(self, vm=None, device_key=None, **kwargs):
+        super(_DVSPortMonitorDesc, self).__init__(**kwargs)
+        self.vm = vm
+        self.device_key = device_key
 
 
 class SpecBuilder(dvs_util.SpecBuilder):
@@ -104,15 +113,157 @@ class SpecBuilder(dvs_util.SpecBuilder):
 
         return wait_options
 
+    def virtual_device_connect_info(self, allow_guest_control, connected, start_connected):
+        virtual_device_connect_info = self.factory.create('ns0:VirtualDeviceConnectInfo')
 
-class VCenterMonitor(multiprocessing.Process):
+        virtual_device_connect_info.allowGuestControl = allow_guest_control
+        virtual_device_connect_info.connected = connected
+        virtual_device_connect_info.startConnected = start_connected
+
+        return virtual_device_connect_info
+
+    def distributed_virtual_switch_port_connection(self, switch_uuid, port_key=None, portgroup_key=None):
+        # connectionCookie is left out intentionally, it cannot be set
+        distributed_virtual_switch_port_connection = self.factory.create('ns0:DistributedVirtualSwitchPortConnection')
+        distributed_virtual_switch_port_connection.switchUuid = switch_uuid
+
+        if port_key:
+            distributed_virtual_switch_port_connection.portKey = port_key
+        if portgroup_key:
+            distributed_virtual_switch_port_connection.portgroupKey = portgroup_key
+
+        return distributed_virtual_switch_port_connection
+
+    def virtual_device_config_spec(self, device, file_operation=None, operation=None, profile=None):
+        virtual_device_config_spec = self.factory.create('ns0:VirtualDeviceConfigSpec')
+        virtual_device_config_spec.device = device
+
+        if file_operation:
+            virtual_device_config_spec.fileOperation = file_operation
+        if operation:
+            virtual_device_config_spec.operation = operation
+        if profile:
+            virtual_device_config_spec.profile = profile
+
+        return virtual_device_config_spec
+
+    def virtual_machine_config_spec(self, device_change=None, change_version=None):
+        virtual_machine_config_spec = self.factory.create('ns0:VirtualMachineConfigSpec')
+
+        if device_change:
+            virtual_machine_config_spec.deviceChange = device_change
+        if change_version:
+            virtual_machine_config_spec.changeVersion = change_version
+
+        return virtual_machine_config_spec
+
+
+class VCenterRecovery(multiprocessing.Process):
     def __init__(self, config, queue=None, quit_event=None):
         self._quit_event = quit_event or multiprocessing.Event()
         self.queue = queue or multiprocessing.Queue()
+        self.quarantine_by_switch = {}
+        self.connection = None
+        self._uuid_dvs_map = {}
+        super(VCenterRecovery, self).__init__(target=self._run, args=(config,))
+
+    def get_quarantine_key_for_switch(self, switch_uuid):
+        quarantine_key = self.quarantine_by_switch.get(switch_uuid, None)
+        if quarantine_key:
+            return quarantine_key
+
+        dvs = self._uuid_dvs_map[switch_uuid]
+
+        network = {'id': 'quarantine', 'admin_state_up': False}
+        segment = {'segmentation_id': 1}
+        pg_name = dvs._get_net_name(dvs.dvs_name, network)
+        pg = dvs._get_or_create_pg(pg_name, network, segment)
+
+        vim = self.connection.vim
+        quarantine_key = vim_util.get_object_property(vim, pg, 'key')
+
+        self.quarantine_by_switch[switch_uuid] = quarantine_key
+        return quarantine_key
+
+    def _run(self, config):
+        self.connection = _create_session(config)
+        vim = self.connection.vim
+        builder = SpecBuilder(vim.client.factory)
+
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
+            self._uuid_dvs_map[dvs.uuid] = dvs
+
+        while not self._quit_event.is_set():
+            ports = []
+            try:
+                ports.append(self.queue.get(True, 0.1))
+                while not self.queue.empty():
+                    ports.append(self.queue.get_nowait())
+            except mqp.Empty:
+                pass
+
+            ports_by_vm = defaultdict(list)
+            for port_desc in ports:
+                ports_by_vm[port_desc.vm].append(port_desc)
+
+            for vm, ports in six.iteritems(ports_by_vm):
+                vm = vim_util.get_moref(vm, 'VirtualMachine')
+
+                device_by_key = {}
+                items = vim_util.get_object_property(vim, vm, 'config.hardware.device') # -> ArrayOfVirtualDevice
+                print("X" * 120)
+                for type, devices in items:
+                    for device in devices:
+                        if hasattr(device, 'macAddress'):
+                            device_by_key[int(device.key)] = device
+
+                device_changes = []
+                for port_desc in ports:
+                    device = device_by_key[port_desc.device_key]
+                    device.backing.port = builder.distributed_virtual_switch_port_connection(port_desc.dvs_uuid,
+                                                                                             portgroup_key=self.get_quarantine_key_for_switch(port_desc.dvs_uuid),
+                                                                                             port_key=None)
+                    device.connectable = builder.virtual_device_connect_info(False, False, False)
+                    change = builder.virtual_device_config_spec(device, operation='edit')
+                    device_changes.append(change)
+
+                config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
+                reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
+
+                result = self.connection.wait_for_task(reconfig_task)
+
+                print(result)
+
+                device_changes = []
+                for port_desc in ports:
+                    device = device_by_key[port_desc.device_key]
+                    device.backing.port = builder.distributed_virtual_switch_port_connection(port_desc.dvs_uuid,
+                                                                                             portgroup_key=port_desc.port_group_key,
+                                                                                             port_key=None)
+                    device.connectable = builder.virtual_device_connect_info(False, True, True)
+                    change = builder.virtual_device_config_spec(device, operation='edit')
+                    device_changes.append(change)
+
+                config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
+                reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
+
+                result = self.connection.wait_for_task(reconfig_task)
+
+                print(result)
+
+        self.connection.logout
+
+
+class VCenterMonitor(multiprocessing.Process):
+    def __init__(self, config, queue=None, quit_event=None, error_queue=None):
+        self._quit_event = quit_event or multiprocessing.Event()
+        self.queue = queue or multiprocessing.Queue()
+        self.error_queue = error_queue or multiprocessing.Queue()
         self.down_ports = {}
+        self.untried_ports = {} # The host is simply down
         self.iteration = 0
         # Map of the VMs and their NICs by the hardware key
-        # e.g vmobrefs -> keys -> _DVSPortDesc
+        # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
         super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
 
@@ -126,23 +277,28 @@ class VCenterMonitor(multiprocessing.Process):
         builder = SpecBuilder(vim.client.factory)
 
         version = None
-        wait_options = builder.wait_options(10, 100)
+        wait_options = builder.wait_options(1, 100)
 
         property_collector = self._create_property_collector(connection)
         self._create_property_filter(connection, property_collector)
 
         while not self._quit_event.is_set():
             result = connection.invoke_api(vim, 'WaitForUpdatesEx', property_collector,
-                                                version=version, options=wait_options)
+                                           version=version, options=wait_options)
+            self.iteration += 1
             if result:
-                self.iteration += 1
                 version = result.version
                 if result.filterSet and result.filterSet[0].objectSet:
                     for update in result.filterSet[0].objectSet:
                         if update.obj._type == 'VirtualMachine':
                             self._handle_virtual_machine(update)
 
-        connection.close
+            now = datetime.utcnow()
+            for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
+                if port_desc.status != 'unrecoverableError':
+                    print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+
+        connection.logout
 
     @staticmethod
     def _create_property_filter(connection, property_collector):
@@ -159,8 +315,8 @@ class VCenterMonitor(multiprocessing.Process):
                                                        False, None)
         object_spec = vim_util.build_object_spec(client_factory, container_view, [traversal_spec])
 
-        # Only static types work, so we have to get all hardware
-        vm_properties = ['config.hardware.device']
+        # Only static types work, so we have to get all hardware, still faster then retrieving individual items
+        vm_properties = ['runtime.powerState', 'config.hardware.device']
         property_specs = [vim_util.build_property_spec(client_factory, 'VirtualMachine', vm_properties)]
 
         property_filter_spec = vim_util.build_property_filter_spec(client_factory, property_specs, [object_spec])
@@ -179,11 +335,13 @@ class VCenterMonitor(multiprocessing.Process):
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
         for port_desc in six.itervalues(vm_hw):
-            mac_address = port_desc.mac_address
-            port_desc.status = 'deleted'
-            print("Removed {} {}".format(mac_address, port_desc.port_key))
-            self.down_ports.pop(mac_address, None)
-            self.queue.put(port_desc)
+            if isinstance(port_desc, _DVSPortMonitorDesc):
+                mac_address = port_desc.mac_address
+                port_desc.status = 'deleted'
+                print("Removed {} {}".format(mac_address, port_desc.port_key))
+                self.down_ports.pop(mac_address, None)
+                self.untried_ports.pop(mac_address, None)
+                self.queue.put(port_desc)
 
     def _handle_virtual_machine(self, update):
         vm = update.obj.value  # vmobref (vm-#)
@@ -202,18 +360,22 @@ class VCenterMonitor(multiprocessing.Process):
                             port = v.backing.port
                             mac_address = str(v.macAddress)
                             connectable = getattr(v, "connectable", None)
+                            device_key=int(v.key)
 
-                            port_desc = _DVSPortDesc(
+                            port_desc = _DVSPortMonitorDesc(
                                 mac_address=mac_address,
                                 connected=connectable.connected if connectable else None,
                                 status=str(connectable.status) if connectable else None,
                                 port_key=str(port.portKey),
                                 port_group_key=str(port.portgroupKey),
                                 dvs_uuid=str(port.switchUuid),
-                                connection_cookie=int(port.connectionCookie))
+                                connection_cookie=int(port.connectionCookie),
+                                vm=vm,
+                                device_key=device_key
+                                )
 
-                            vm_hw[int(v.key)] = port_desc
-                            self._add_port(port_desc)
+                            vm_hw[port_desc.device_key] = port_desc
+                            self._handle_port_update(port_desc)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vm)
             elif change_name.startswith("config.hardware.device["):
@@ -226,7 +388,14 @@ class VCenterMonitor(multiprocessing.Process):
                         port_desc.connected = change.val
                     elif "connectable.status" == attribute:
                         port_desc.status = change.val
-                    self._add_port(port_desc)
+                    self._handle_port_update(port_desc)
+            elif change_name == 'runtime.powerState':
+                # print("{}: {}".format(vm, change.val))
+                vm_hw['power_state'] = change.val
+                for port_desc in six.itervalues(vm_hw):
+                    if isinstance(port_desc, _DVSPortMonitorDesc):
+                        self._handle_port_update(port_desc)
+
             else:
                 print(change)
 
@@ -235,22 +404,30 @@ class VCenterMonitor(multiprocessing.Process):
         else:
             pass
 
-    def _add_port(self, port_desc):
+    def _handle_port_update(self, port_desc):
         now = datetime.utcnow()
         mac_address = port_desc.mac_address
         if port_desc.is_connected():
             self.queue.put(port_desc)
             then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
+            self.untried_ports.pop(mac_address, None)
             if then:
-                print("Port {} {} was down for {} ({})".format(port_desc.port_key,
-                                                               mac_address, (now - then).total_seconds(),
+                print("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
+                                                               (now - then).total_seconds(),
                                                                (self.iteration - iteration)))
             else:
-                print("Port {} {} came up connected".format(port_desc.port_key,
-                                                               mac_address))
-        elif not port_desc in self.down_ports:
-            print("Port {} {} registered as down: {}".format(port_desc.port_key, mac_address, port_desc))
-            self.down_ports[mac_address] = (now, port_desc, self.iteration)
+                pass
+                # print("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+        else:
+            power_state = self._hardware_map[port_desc.vm].get('power_state', None)
+            if power_state != 'poweredOn':
+                self.untried_ports[mac_address] = port_desc
+            elif not port_desc in self.down_ports:
+                status = port_desc.status
+                print("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
+                self.down_ports[mac_address] = (now, port_desc, self.iteration)
+                if status == 'unrecoverableError':
+                    self.error_queue.put(port_desc)
 
 
 class VCenter(object):
@@ -263,19 +440,48 @@ class VCenter(object):
     def __init__(self, config=None):
         config = config or CONF.ML2_VMWARE
         self.connection = None
-
-        self._monitor_process = VCenterMonitor(config)
+        self.quit_event = multiprocessing.Event()
+        self._monitor_process = VCenterMonitor(config, quit_event=self.quit_event)
+        # self._recovery_process = VCenterRecovery(config, quit_event=self.quit_event, queue=self._monitor_process.error_queue)
         self._monitor_process.start()
+
+        if getattr(self, '_recovery_process', None):
+            self._recovery_process.start()
 
         self.connection = _create_session(config)
 
         self.uuid_port_map = {}
         self.mac_port_map = {}
 
-        self._uuid_dvs_map = {}
-        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
-            self._uuid_dvs_map[dvs.uuid] = dvs
+        self.uuid_dvs_map = {}
 
+        builder = security_group_utils.PortConfigSpecBuilder(self.connection.vim.client.factory)
+
+        drop_all_rules = []
+        seq = 0
+        for protocol in dvs_const.PROTOCOL.values():
+            drop_all_rules.append(security_group_utils.DropAllRule(builder, None, protocol,
+                                     name='drop all').build(seq))
+
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
+            self.uuid_dvs_map[dvs.uuid] = dvs
+            for port_group in dvs._get_all_port_groups():
+                pg_info = dvs._get_config_by_ref(port_group)
+                if pg_info.name == 'Trunk':
+                    next
+
+                port_setting = builder.port_setting(vlan=builder.vlan(1),
+                                                    blocked=builder.blocked(False),
+                                                    filter_policy=builder.filter_policy(drop_all_rules))
+                pg_spec = builder.pg_config(port_setting)
+                pg_spec.configVersion = pg_info.configVersion
+                try:
+                    pg_update_task = self.connection.invoke_api(self.connection.vim, 'ReconfigureDVPortgroup_Task', port_group,
+                                                            spec=pg_spec)
+
+                    self.connection.wait_for_task(pg_update_task)
+                except vmware_exceptions.VimException:
+                    pass
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -346,7 +552,7 @@ class VCenter(object):
         return ports_up, ports_down
 
     def get_dvs_by_uuid(self, uuid):
-        return self._uuid_dvs_map[uuid]
+        return self.uuid_dvs_map[uuid]
 
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
@@ -366,12 +572,12 @@ class VCenter(object):
                     port = self.mac_port_map.get(port_desc.mac_address, {})
                     port.update({
                         'port_desc': port_desc,
-                            'port': {
-                                'binding:vif_details': {
-                                    'dvs_port_key': port_desc.port_key,
-                                    'dvs_uuid': port_desc.dvs_uuid
-                                }, 'mac_address': port_desc.mac_address}
-                        })
+                        'port': {
+                            'binding:vif_details': {
+                                'dvs_port_key': port_desc.port_key,
+                                'dvs_uuid': port_desc.dvs_uuid
+                            }, 'mac_address': port_desc.mac_address}
+                    })
                     ports_by_mac[port_desc.mac_address] = port
         except mqp.Empty:
             pass
@@ -386,17 +592,22 @@ class VCenter(object):
                 port = ports_by_key[port_info.key]
                 port_desc = port['port_desc']
                 if getattr(port_info, 'connectionCookie', None) != port_desc.connection_cookie:
-                    LOG.warning("Different connection cookie then expected: Got {}, Expected {}".
-                                format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie))
+                    LOG.error("Cookie mismatch: {} {} {} <> {}, Removing port {}".
+                                format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie,
+                                       port_desc.mac_address, port_desc.port_key, port['id']))
+                    ports_by_mac.pop(port_desc.mac_address)
+                else:
+                    state = getattr(port_info, "state", None)
+                    runtime_info = getattr(state, "runtimeInfo", None)
+                    if getattr(runtime_info, "linkUp", False):
+                        LOG.error("Port Link Down: {}".format(port_info.key))
 
-                state = getattr(port_info, "state", None)
-                runtime_info = getattr(state, "runtimeInfo", None)
-                if getattr(runtime_info, "linkUp", False):
-                    LOG.error("Port Link Down: {}".format(port_info.key))
-
-                VCenter.update_port_desc(port, port_info)
+                    VCenter.update_port_desc(port, port_info)
 
         return ports_by_mac
+
+    def stop(self, *args):
+        self.quit_event.set()
 
 
 # Small test routine
@@ -423,19 +634,30 @@ def main():
     print(ports)
     print(w.elapsed())
 
-    while True:
-        ports = util.get_new_ports(True)
-        print(ports)
 
-    monitor = VCenterMonitor(CONF.ML2_VMWARE)
-    monitor.start()
+    for dvs in six.itervalues(util.uuid_dvs_map):
+        builder = SpecBuilder(dvs.connection.vim.client.factory)
+        port_keys = dvs.connection.invoke_api(
+            dvs.connection.vim,
+            'FetchDVPortKeys',
+            dvs._dvs, criteria=builder.port_criteria())
+        ports = dvs.connection.invoke_api(
+            dvs.connection.vim,
+            'FetchDVPorts',
+            dvs._dvs, criteria=builder.port_criteria(port_key=port_keys))
 
-    signal.signal(signal.SIGTERM, monitor.stop)
-    signal.signal(signal.SIGINT, monitor.stop)
+        configs = []
+        for port in ports:
+            cookie = getattr(port, 'connectionCookie', None)
+            name = getattr(port.config, 'name', None)
+            description = getattr(port.config, 'description', None)
+            if not cookie and (name or description):
+                configs.append(builder.port_config_spec(port.key, version=port.config.configVersion, name='', description=''))
 
-    if hasattr(signal, 'SIGHUP'):
-        signal.signal(signal.SIGHUP, monitor.stop)
+        if configs:
+            dvs.update_ports(configs)
 
+    util.stop()
 
 
 if __name__ == "__main__":
