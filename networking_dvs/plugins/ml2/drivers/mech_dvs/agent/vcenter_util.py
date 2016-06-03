@@ -20,7 +20,7 @@ from datetime import datetime
 from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
-from oslo_service import loopingcall
+from oslo_service  import loopingcall
 from oslo_vmware import vim_util, api as vmwareapi
 from oslo_vmware import exceptions as vmware_exceptions
 
@@ -30,7 +30,7 @@ except:
     import multiprocessing.queues as mqp
 
 from networking_dvs.common import config as dvs_config, constants as dvs_const
-from networking_dvs.utils import dvs_util, security_group_utils
+from networking_dvs.utils import dvs_util
 
 import multiprocessing
 
@@ -158,16 +158,114 @@ class SpecBuilder(dvs_util.SpecBuilder):
         return virtual_machine_config_spec
 
 
-class VCenterMonitor(multiprocessing.Process):
+class VCenterRecovery(multiprocessing.Process):
     def __init__(self, config, queue=None, quit_event=None):
         self._quit_event = quit_event or multiprocessing.Event()
         self.queue = queue or multiprocessing.Queue()
+        self.quarantine_by_switch = {}
+        self.connection = None
+        self._uuid_dvs_map = {}
+        super(VCenterRecovery, self).__init__(target=self._run, args=(config,))
+
+    def get_quarantine_key_for_switch(self, switch_uuid):
+        quarantine_key = self.quarantine_by_switch.get(switch_uuid, None)
+        if quarantine_key:
+            return quarantine_key
+
+        dvs = self._uuid_dvs_map[switch_uuid]
+
+        network = {'id': 'quarantine', 'admin_state_up': False}
+        segment = {'segmentation_id': 1}
+        pg_name = dvs._get_net_name(dvs.dvs_name, network)
+        pg = dvs._get_or_create_pg(pg_name, network, segment)
+
+        vim = self.connection.vim
+        quarantine_key = vim_util.get_object_property(vim, pg, 'key')
+
+        self.quarantine_by_switch[switch_uuid] = quarantine_key
+        return quarantine_key
+
+    def _run(self, config):
+        self.connection = _create_session(config)
+        vim = self.connection.vim
+        builder = SpecBuilder(vim.client.factory)
+
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
+            self._uuid_dvs_map[dvs.uuid] = dvs
+
+        while not self._quit_event.is_set():
+            ports = []
+            try:
+                ports.append(self.queue.get(True, 0.1))
+                while not self.queue.empty():
+                    ports.append(self.queue.get_nowait())
+            except mqp.Empty:
+                pass
+
+            ports_by_vm = defaultdict(list)
+            for port_desc in ports:
+                ports_by_vm[port_desc.vm].append(port_desc)
+
+            for vm, ports in six.iteritems(ports_by_vm):
+                vm = vim_util.get_moref(vm, 'VirtualMachine')
+
+                device_by_key = {}
+                items = vim_util.get_object_property(vim, vm, 'config.hardware.device') # -> ArrayOfVirtualDevice
+                for type, devices in items:
+                    for device in devices:
+                        if hasattr(device, 'macAddress'):
+                            device_by_key[int(device.key)] = device
+
+                device_changes = []
+                for port_desc in ports:
+                    device = device_by_key[port_desc.device_key]
+                    device.backing.port = builder.distributed_virtual_switch_port_connection(port_desc.dvs_uuid,
+                                                                                             portgroup_key=self.get_quarantine_key_for_switch(port_desc.dvs_uuid),
+                                                                                             port_key=None)
+
+                    device.connectable = builder.virtual_device_connect_info(False, False, False)
+                    change = builder.virtual_device_config_spec(device, operation='edit')
+                    device_changes.append(change)
+
+                config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
+                reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
+
+                result = self.connection.wait_for_task(reconfig_task)
+
+                print(result)
+
+                device_changes = []
+                for port_desc in ports:
+                    device = device_by_key[port_desc.device_key]
+                    device.backing.port = builder.distributed_virtual_switch_port_connection(port_desc.dvs_uuid,
+                                                                                             portgroup_key=port_desc.port_group_key,
+                                                                                             port_key=None)
+                    device.connectable = builder.virtual_device_connect_info(False, True, True)
+                    change = builder.virtual_device_config_spec(device, operation='edit')
+                    device_changes.append(change)
+
+                config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
+                reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
+
+                result = self.connection.wait_for_task(reconfig_task)
+
+                print(result)
+
+        self.connection.logout
+
+
+class VCenterMonitor(multiprocessing.Process):
+    def __init__(self, config, queue=None, quit_event=None, error_queue=None):
+        self._quit_event = quit_event or multiprocessing.Event()
+        self.queue = queue or multiprocessing.Queue()
+        self.error_queue = error_queue or multiprocessing.Queue()
         self.down_ports = {}
         self.untried_ports = {} # The host is simply down
         self.iteration = 0
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
+        loopingcall.FixedIntervalLoopingCall(lambda: LOG.debug("Tick")).start(10.0)
         super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
 
     def stop(self, *args):
@@ -180,7 +278,7 @@ class VCenterMonitor(multiprocessing.Process):
         builder = SpecBuilder(vim.client.factory)
 
         version = None
-        wait_options = builder.wait_options(1, 100)
+        wait_options = builder.wait_options(1, 20)
 
         property_collector = self._create_property_collector(connection)
         self._create_property_filter(connection, property_collector)
@@ -328,15 +426,28 @@ class VCenterMonitor(multiprocessing.Process):
                 status = port_desc.status
                 print("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
+                if status == 'unrecoverableError':
+                    self.error_queue.put(port_desc)
 
 
 class VCenter(object):
+    # PropertyCollector discovers changes on vms and their hardware and produces
+    #    (mac, switch, portKey, portGroupKey, connectable.connected, connectable.status)
+    #    internally, it keeps internally vm and key for identifying updates
+    # Subsequentally, the mac has to be identified with a port
+    #
+
     def __init__(self, config=None):
         config = config or CONF.ML2_VMWARE
         self.connection = None
         self.quit_event = multiprocessing.Event()
         self._monitor_process = VCenterMonitor(config, quit_event=self.quit_event)
+        # self._recovery_process = VCenterRecovery(config, quit_event=self.quit_event, queue=self._monitor_process.error_queue)
         self._monitor_process.start()
+
+        if getattr(self, '_recovery_process', None):
+            self._recovery_process.start()
+
         self.connection = _create_session(config)
 
         self.uuid_port_map = {}
@@ -344,33 +455,9 @@ class VCenter(object):
 
         self.uuid_dvs_map = {}
 
-        builder = security_group_utils.PortConfigSpecBuilder(self.connection.vim.client.factory)
-
-        drop_all_rules = []
-        seq = 0
-        for protocol in dvs_const.PROTOCOL.values():
-            drop_all_rules.append(security_group_utils.DropAllRule(builder, None, protocol,
-                                     name='drop all').build(seq))
-
         for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
             self.uuid_dvs_map[dvs.uuid] = dvs
-            for port_group in dvs._get_all_port_groups():
-                pg_info = dvs._get_config_by_ref(port_group)
-                if pg_info.name == 'Trunk':
-                    next
 
-                port_setting = builder.port_setting(vlan=builder.vlan(1),
-                                                    blocked=builder.blocked(False),
-                                                    filter_policy=builder.filter_policy(drop_all_rules))
-                pg_spec = builder.pg_config(port_setting)
-                pg_spec.configVersion = pg_info.configVersion
-                try:
-                    pg_update_task = self.connection.invoke_api(self.connection.vim, 'ReconfigureDVPortgroup_Task', port_group,
-                                                            spec=pg_spec)
-
-                    self.connection.wait_for_task(pg_update_task)
-                except vmware_exceptions.VimException:
-                    pass
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -430,6 +517,10 @@ class VCenter(object):
                 port = ports_by_key[port_key]
                 VCenter.update_port_desc(port, port_info)
                 port_desc = port['port_desc']
+                connection_cookie = getattr(port_info, 'connectionCookie', None)
+                if port_desc.connection_cookie != connection_cookie:
+                    LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
+                                                                      port_desc.connection_cookie, connection_cookie))
 
                 if port["admin_state_up"]:
                     if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
@@ -483,7 +574,7 @@ class VCenter(object):
                 if getattr(port_info, 'connectionCookie', None) != port_desc.connection_cookie:
                     LOG.error("Cookie mismatch: {} {} {} <> {}, Removing port {}".
                                 format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie,
-                                       port_desc.mac_address, port_desc.port_key, port['id']))
+                                       port_desc.mac_address, port_desc.port_key, port.get('id', port.keys)))
                     ports_by_mac.pop(port_desc.mac_address)
                 else:
                     state = getattr(port_info, "state", None)

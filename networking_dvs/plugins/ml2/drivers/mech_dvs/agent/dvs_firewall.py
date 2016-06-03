@@ -57,7 +57,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                  [p['id'] for p in ports])
 
         stored_ports = []
-        print('--------------------')
         for port in ports: # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
             stored = self.v_center.uuid_port_map.get(port_id, None)
@@ -68,7 +67,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 self._ports_by_device_id[stored['device']] = stored
             else:
                 print("Unknown port {}".format(port_id))
-        print('--------------------')
         self._apply_sg_rules_for_port(stored_ports)
 
     def _remove_sg_from_dvs_port(self, port_ids):
