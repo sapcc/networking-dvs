@@ -262,7 +262,6 @@ def update_port_rules(dvs, ports):
                 return dvs.update_ports(port_config_list)
         except vmware_exceptions.VimException as e:
             if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
-                print('--------------------------------')
                 ports_by_key = {}
                 for port in ports:
                     port_desc = port.get('port_desc', None)
@@ -280,7 +279,6 @@ def update_port_rules(dvs, ports):
                         ports.remove(port)
                     else:
                         port_desc.config_version = port_info.config.configVersion
-                print('--------------------------------')
                 continue
             if 'The object or item referred to could not be found' in str(e):
                 return

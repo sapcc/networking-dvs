@@ -198,12 +198,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def _scan_ports(self):
         try:
-            start = time.clock()
             ports_by_mac = self.api.get_new_ports()
             macs = set(six.iterkeys(ports_by_mac))
-            if not macs:
-                LOG.debug(_LI("Scan 0 ports completed in {} seconds".format(time.clock() - start)))
-            else:
+            if macs:
                 print("Looking for {} macs".format(len(macs)))
                 neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
                                                                          host=self.conf.host)
@@ -220,7 +217,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                 dict_merge(port_info, neutron_info)
                                 self.api.uuid_port_map[port_id] = port_info
 
-                LOG.debug(_LI("Scan {} ports completed in {} seconds (Missing {})".format(len(neutron_ports), time.clock() - start, len(macs))))
+                LOG.debug(_LI("Received {} ports (Missing {})".format(len(neutron_ports), len(macs))))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
