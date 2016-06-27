@@ -230,9 +230,7 @@ class VCenterRecovery(multiprocessing.Process):
                 config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
                 reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
 
-                result = self.connection.wait_for_task(reconfig_task)
-
-                print(result)
+                self.connection.wait_for_task(reconfig_task)
 
                 device_changes = []
                 for port_desc in ports:
@@ -247,9 +245,7 @@ class VCenterRecovery(multiprocessing.Process):
                 config_spec = builder.virtual_machine_config_spec(device_change=device_changes)
                 reconfig_task = self.connection.invoke_api(vim, 'ReconfigVM_Task', vm, spec=config_spec)
 
-                result = self.connection.wait_for_task(reconfig_task)
-
-                print(result)
+                self.connection.wait_for_task(reconfig_task)
 
         self.connection.logout
 
@@ -398,9 +394,8 @@ class VCenterMonitor(multiprocessing.Process):
                 for port_desc in six.itervalues(vm_hw):
                     if isinstance(port_desc, _DVSPortMonitorDesc):
                         self._handle_port_update(port_desc)
-
             else:
-                print(change)
+                LOG.debug(change)
 
         if update.kind == 'leave':
             self._handle_removal(vm)
@@ -522,7 +517,8 @@ class VCenter(object):
             specs = []
             for port in six.itervalues(ports_by_key):
                 if port["network_type"] == "vlan":
-                    specs.append(builder.neutron_to_port_config_spec(port))
+                    spec = builder.neutron_to_port_config_spec(port)
+                    specs.append(spec)
                 else:
                     ports_down.append(port)
                     LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), port["port_id"])

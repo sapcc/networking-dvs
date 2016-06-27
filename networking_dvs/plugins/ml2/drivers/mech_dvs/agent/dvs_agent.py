@@ -210,7 +210,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
                 for neutron_info in neutron_ports:
                     if neutron_info:
-                        mac = neutron_info.get("device", None)
+                        # device <=> mac_address are the same, but mac_address is missing, when there is no data
+                        mac = neutron_info.get("mac_address", None)
                         macs.discard(mac)
                         port_info = ports_by_mac.get(mac, None)
                         if port_info:
@@ -219,6 +220,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                 port_info["port"]["id"] = port_id
                                 dict_merge(port_info, neutron_info)
                                 self.api.uuid_port_map[port_id] = port_info
+                if macs:
+                    LOG.warning(_LW("Could not find the following macs: {}").format(macs))
 
                 LOG.debug(_LI("Scan {} ports completed in {} seconds (Missing {})".format(len(neutron_ports), time.clock() - start, len(macs))))
 
