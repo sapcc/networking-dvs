@@ -356,26 +356,29 @@ class VCenterMonitor(multiprocessing.Process):
                 if "assign" == change.op:
                     for v in change.val[0]:
                         mac_address = getattr(v, 'macAddress', None)
+
                         if mac_address:
-                            port = v.backing.port
-                            mac_address = str(v.macAddress)
-                            connectable = getattr(v, "connectable", None)
-                            device_key=int(v.key)
 
-                            port_desc = _DVSPortMonitorDesc(
-                                mac_address=mac_address,
-                                connected=connectable.connected if connectable else None,
-                                status=str(connectable.status) if connectable else None,
-                                port_key=str(port.portKey),
-                                port_group_key=str(port.portgroupKey),
-                                dvs_uuid=str(port.switchUuid),
-                                connection_cookie=int(port.connectionCookie),
-                                vm=vm,
-                                device_key=device_key
-                                )
+                            port = getattr(v.backing, 'port', None)
+                            if port:
+                                mac_address = str(v.macAddress)
+                                connectable = getattr(v, "connectable", None)
+                                device_key=int(v.key)
 
-                            vm_hw[port_desc.device_key] = port_desc
-                            self._handle_port_update(port_desc)
+                                port_desc = _DVSPortMonitorDesc(
+                                    mac_address=mac_address,
+                                    connected=connectable.connected if connectable else None,
+                                    status=str(connectable.status) if connectable else None,
+                                    port_key=str(getattr(port, "portKey", None)),
+                                    port_group_key=str(port.portgroupKey),
+                                    dvs_uuid=str(port.switchUuid),
+                                    connection_cookie=int(getattr(port, "connectionCookie", 0)),
+                                    vm=vm,
+                                    device_key=device_key
+                                    )
+
+                                vm_hw[port_desc.device_key] = port_desc
+                                self._handle_port_update(port_desc)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vm)
             elif change_name.startswith("config.hardware.device["):
