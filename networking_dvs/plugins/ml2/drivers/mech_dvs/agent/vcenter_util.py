@@ -478,7 +478,9 @@ class VCenter(object):
         for port in ports:
             port_desc = port['port_desc']
             dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-            ports_by_switch_and_key[dvs][port_desc.port_key] = port
+
+            if dvs:
+                ports_by_switch_and_key[dvs][port_desc.port_key] = port
 
         return ports_by_switch_and_key
 
@@ -532,7 +534,7 @@ class VCenter(object):
         return ports_up, ports_down
 
     def get_dvs_by_uuid(self, uuid):
-        return self.uuid_dvs_map[uuid]
+        return self.uuid_dvs_map.get(uuid,None)
 
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
