@@ -12,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import atexit
+import atexit, signal
 import six
 from collections import defaultdict
 from datetime import datetime
@@ -265,13 +265,13 @@ class VCenterMonitor(multiprocessing.Process):
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
-        loopingcall.FixedIntervalLoopingCall(lambda: LOG.debug("Tick")).start(10.0)
         super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
 
     def stop(self, *args):
         self._quit_event.set()
 
     def _run(self, config):
+        LOG.info(_LI("Monitor running... "))
         connection = _create_session(config)
 
         vim = connection.vim
@@ -441,26 +441,48 @@ class VCenter(object):
     #
 
     def __init__(self, config=None):
-        config = config or CONF.ML2_VMWARE
+        self.config = config or CONF.ML2_VMWARE
         self.connection = None
         self.quit_event = multiprocessing.Event()
-        self._monitor_process = VCenterMonitor(config, quit_event=self.quit_event)
-        # self._recovery_process = VCenterRecovery(config, quit_event=self.quit_event, queue=self._monitor_process.error_queue)
+        self._monitor_process = VCenterMonitor(self.config, quit_event=self.quit_event)
+        #self._recovery_process = VCenterRecovery(self.config, quit_event=self.quit_event,
+        #                                         queue=self._monitor_process.error_queue)
+
         self._monitor_process.start()
-
         if getattr(self, '_recovery_process', None):
-            self._recovery_process.start()
+            self._recovery_process.start(self)
 
-        self.connection = _create_session(config)
+        if hasattr(signal, 'SIGCHLD'):
+            signal.signal(signal.SIGCHLD, self._recover_processes)
+        else:
+            loopingcall.FixedIntervalLoopingCall(self._recover_processes)
+
+        self.connection = _create_session(self.config)
 
         self.uuid_port_map = {}
         self.mac_port_map = {}
 
         self.uuid_dvs_map = {}
 
-        for dvs in six.itervalues(dvs_util.create_network_map_from_config(config, self.connection)):
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, self.connection)):
             self.uuid_dvs_map[dvs.uuid] = dvs
 
+    def _recover_processes(self, *args):
+        print("Trying to recover processes")
+        if self.quit_event.is_set():
+            print("Qutting, nothing to be done")
+            return
+
+        if not self._monitor_process.is_alive():
+            LOG.warning(_LW("Monitor process died, restarting it"))
+            self._monitor_process = VCenterMonitor(self.config, quit_event=self.quit_event)
+            self._monitor_process.start()
+
+        if getattr(self, '_recovery_process', None) and not self._recovery_process.is_alive():
+            LOG.warning(_LW("Recovery process died, restarting it"))
+            self._recovery_process = VCenterRecovery(self.config, quit_event=self.quit_event,
+                                                     queue=self._monitor_process.error_queue)
+            self._recovery_process.start(self)
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -597,7 +619,6 @@ class VCenter(object):
 
 # Small test routine
 def main():
-    import signal
     import sys
     try:
         import multiprocessing.Queue as mpq
@@ -642,6 +663,8 @@ def main():
         if configs:
             dvs.update_ports(configs)
 
+    import time
+    time.sleep(300)
     util.stop()
 
 
