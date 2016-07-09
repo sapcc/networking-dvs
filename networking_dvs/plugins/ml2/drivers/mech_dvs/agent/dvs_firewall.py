@@ -102,3 +102,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     rules += len(port['security_group_rules'])
 
                 sg_util.update_port_rules(dvs, sub_list)
+
+                # The config version is in essence a counter.
+                for port in sub_list:
+                    port_desc = port['port_desc']
+                    port_desc.config_version = str(int(port_desc.config_version) + 1)
