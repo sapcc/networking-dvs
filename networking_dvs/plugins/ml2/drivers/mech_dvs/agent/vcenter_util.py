@@ -483,6 +483,12 @@ class VCenter(object):
     def update_port_desc(port, port_info):
         # TODO validate connectionCookie, so we still have the same instance behind that portKey
         port_desc = port['port_desc']
+        connection_cookie = getattr(port_info, 'connectionCookie', None)
+        if port_desc.connection_cookie != connection_cookie:
+            LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
+                                                              port_desc.connection_cookie, connection_cookie))
+            return False
+
         port_desc.config_version = port_info.config.configVersion
         if getattr(port_info.config, "setting", None) \
                 and getattr(port_info.config.setting, "vlan", None) \
@@ -492,6 +498,8 @@ class VCenter(object):
         if getattr(port_info, "state", None) \
                 and getattr(port_info.state, "runtimeInfo", None):
             port_desc.link_up = getattr(port_info.state.runtimeInfo, "linkUp", None)
+
+        return True
 
     def ports_by_switch_and_key(self, ports):
         ports_by_switch_and_key = defaultdict(dict)
@@ -538,19 +546,14 @@ class VCenter(object):
             for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
                 port_key = str(port_info.key)
                 port = ports_by_key[port_key]
-                VCenter.update_port_desc(port, port_info)
                 port_desc = port['port_desc']
-                connection_cookie = getattr(port_info, 'connectionCookie', None)
-                if port_desc.connection_cookie != connection_cookie:
-                    LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
-                                                                      port_desc.connection_cookie, connection_cookie))
-
-                if port["admin_state_up"]:
-                    if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
-                        ports_up.append(port)
-                else:  # Port down requested
-                    if not port_desc.link_up:
-                        ports_down.append(port)
+                if VCenter.update_port_desc(port, port_info):
+                    if port["admin_state_up"]:
+                        if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
+                            ports_up.append(port)
+                    else:  # Port down requested
+                        if not port_desc.link_up:
+                            ports_down.append(port)
 
         return ports_up, ports_down
 
@@ -590,22 +593,19 @@ class VCenter(object):
         # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
         # partly connected, meaning: the instance is associated, but the link is not quite up yet
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
-            keys = list(six.iterkeys(ports_by_key))
-            for port_info in dvs.get_port_info_by_portkey(keys):  # View is not sufficient
+            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):  # View is not sufficient
                 port = ports_by_key[port_info.key]
                 port_desc = port['port_desc']
-                if getattr(port_info, 'connectionCookie', None) != port_desc.connection_cookie:
-                    LOG.error("Cookie mismatch: {} {} {} <> {}, Removing port {}".
-                                format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie,
-                                       port_desc.mac_address, port_desc.port_key, port.get('id', port.keys)))
-                    ports_by_mac.pop(port_desc.mac_address)
-                else:
+                if VCenter.update_port_desc(port, port_info):
                     state = getattr(port_info, "state", None)
                     runtime_info = getattr(state, "runtimeInfo", None)
                     if getattr(runtime_info, "linkUp", False):
                         LOG.error("Port Link Down: {}".format(port_info.key))
-
-                    VCenter.update_port_desc(port, port_info)
+                else:
+                    LOG.error("Cookie mismatch: {} {} {} <> {}, Removing port {}".
+                              format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie,
+                                     port_desc.mac_address, port_desc.port_key, port.get('id', port.keys)))
+                    ports_by_mac.pop(port_desc.mac_address)
 
         return ports_by_mac
 
