@@ -23,6 +23,12 @@ import eventlet
 
 eventlet.monkey_patch()
 
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+
 import oslo_messaging
 from oslo_log import log as logging
 from oslo_service import loopingcall
