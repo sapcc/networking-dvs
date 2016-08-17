@@ -1,6 +1,24 @@
 # networking-dvs
 Openstack L2 networking components for VMware DVS
 
+## L2 DVS Agent
+
+The DVS Agent uses the `vcenter_util.VCenter` object to monitor the VCenter for new VMs with a property-collector and then queries the Neutron RPC for the segmentation id and device-uuid.
+If configures then the VLAN-ID in the DVS Port accordingly. DV-Switch and DVS-Port group remain untouched.
+
+To ensure that the changes are applied to the correct port in the face of parallel changes outside of the control of the agent,
+the `configVersion` attribute is tracked.
+
+
+## Firewall Driver
+
+Builds up on L2 DVS Agent and relies on the mapping of neutron-ids to DV-Switch & DVS-Port-ID established in `vcenter_util.VCenter` (and the L2 DVS Agent).
+The given firewall rules are translated to tracking- and marking rules, which are then applied to the ports affected.
+
+
+
+## How to run
+
 
 Install on devstack
 
