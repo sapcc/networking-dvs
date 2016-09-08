@@ -88,7 +88,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                                         self.sg_plugin_rpc,
                                                         local_vlan_map=None,
                                                         integration_bridge=self.api,  # Passed on to FireWall Driver
-                                                        defer_refresh_firewall=True)
+                                                        defer_refresh_firewall=False)
 
         self.run_daemon_loop = True
         self.iter_num = 0
