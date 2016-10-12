@@ -31,7 +31,7 @@ except:
 
 from networking_dvs.common import config as dvs_config, constants as dvs_const
 from networking_dvs.utils import dvs_util
-
+from itertools import chain
 import multiprocessing
 
 CONF = dvs_config.CONF
@@ -57,9 +57,11 @@ def _create_session(config):
 
 
 class _DVSPortDesc(object):
+    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status', 'config_version', 'vlan_id', 'link_up',)
+
     def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
                  mac_address=None, connection_cookie=None, connected=None, status=None,
-                 config_version=None, vlan_id=None, link_up=None, vm=None):
+                 config_version=None, vlan_id=None, link_up=None):
         self.dvs_uuid = dvs_uuid
         self.port_key = port_key
         self.port_group_key = port_group_key
@@ -71,17 +73,25 @@ class _DVSPortDesc(object):
         self.vlan_id = vlan_id
         self.link_up = link_up
 
-    def update(self, source):
-        self.__dict__.update(source.__dict__)
-
     def is_connected(self):
         return self.connected and self.status == 'ok'
 
+    @classmethod
+    def _slots(cls):
+        return chain.from_iterable(getattr(cls2, '__slots__', tuple()) for cls2 in cls.__mro__)
+
+    def update(self, source):
+        for slot in self._slots():
+            if hasattr(source, slot):
+                setattr(self, getattr(source, slot))
+
     def __repr__(self):
-        return "%s(%r)" % (self.__class__, self.__dict__)
+        return "%s(%r)" % (self.__class__, {s: getattr(self, s, None) for s in self._slots()})
 
 
 class _DVSPortMonitorDesc(_DVSPortDesc):
+    __slots__ = ('vm', 'device_key',)
+
     def __init__(self, vm=None, device_key=None, **kwargs):
         super(_DVSPortMonitorDesc, self).__init__(**kwargs)
         self.vm = vm
