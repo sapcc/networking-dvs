@@ -236,14 +236,16 @@ def build_port_rules(builder, ports, hashed_rules = None):
         port_desc = port.get('port_desc', None)
         if port_desc:
             key = port_desc.port_key
+            filter_config_key = port_desc.filter_config_key
             version = port_desc.config_version
         else:
             key = port.get('binding:vif_details', {}).get('dvs_port_key')
+            filter_config_key = None
             version = None
 
         if key:
             port_config = port_configuration(
-                builder, key, port['security_group_rules'], hashed_rules, version=version)
+                builder, key, port['security_group_rules'], hashed_rules, version=version, filter_config_key=filter_config_key)
             port_config_list.append(port_config)
     return port_config_list
 
@@ -286,7 +288,7 @@ def update_port_rules(dvs, ports):
                 raise exceptions.wrap_wmvare_vim_exception(e)
 
 
-def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None):
+def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):
     sg_rules = sg_rules or []
     rules = []
     seq = 0
@@ -325,7 +327,7 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None):
                                  name='drop all').build(seq))
         seq += 10
 
-    filter_policy = builder.filter_policy(rules)
+    filter_policy = builder.filter_policy(rules, filter_config_key=filter_config_key)
     setting = builder.port_setting(filter_policy=filter_policy)
     spec = builder.port_config_spec(port_key, setting=setting, version=version)
     return spec

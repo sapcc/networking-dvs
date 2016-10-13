@@ -57,7 +57,7 @@ def _create_session(config):
 
 
 class _DVSPortDesc(object):
-    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status', 'config_version', 'vlan_id', 'link_up',)
+    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status', 'config_version', 'vlan_id', 'link_up', 'filter_config_key', )
 
     def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
                  mac_address=None, connection_cookie=None, connected=None, status=None,
@@ -399,15 +399,25 @@ class VCenter(object):
                                                               port_desc.connection_cookie, connection_cookie))
             return False
 
-        port_desc.config_version = port_info.config.configVersion
-        if getattr(port_info.config, "setting", None) \
-                and getattr(port_info.config.setting, "vlan", None) \
-                and port_info.config.setting.vlan.vlanId:
-            port_desc.vlan_id = port_info.config.setting.vlan.vlanId
+        port_config = port_info.config
 
-        if getattr(port_info, "state", None) \
-                and getattr(port_info.state, "runtimeInfo", None):
-            port_desc.link_up = getattr(port_info.state.runtimeInfo, "linkUp", None)
+        port_desc.config_version = port_config.configVersion
+        port_setting = getattr(port_config, "setting", None)
+        if port_setting:
+            vlan = getattr(port_setting, "vlan", None)
+            if vlan and  vlan.vlanId:
+                port_desc.vlan_id = vlan.vlanId
+
+            filter_policy = getattr(port_setting, "filterPolicy", None)
+            filter_config = getattr(filter_policy, "filterConfig", None)
+
+            if filter_policy:
+                port_desc.filter_config_key = filter_config[0].key
+
+        port_state = getattr(port_info, "state", None)
+        if port_state:
+            runtime_info = getattr(port_state, "runtimeInfo", None)
+            port_desc.link_up = getattr(runtime_info, "linkUp", None)
 
         return True
 

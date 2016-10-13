@@ -480,7 +480,7 @@ class SpecBuilder(object):
 
         return port_setting
 
-    def filter_policy(self, rules):
+    def filter_policy(self, rules, filter_config_key=None):
         filter_policy = self.factory.create('ns0:DvsFilterPolicy')
         if rules:
             traffic_ruleset = self.factory.create('ns0:DvsTrafficRuleset')
@@ -490,6 +490,8 @@ class SpecBuilder(object):
             filter_config.agentName = "dvfilter-generic-vmware"
             filter_config.inherited = '0'
             filter_config.trafficRuleset = traffic_ruleset
+            if filter_config_key:
+                filter_config.key = filter_config_key
             filter_policy.filterConfig = [filter_config]
             filter_policy.inherited = '0'
         else:
