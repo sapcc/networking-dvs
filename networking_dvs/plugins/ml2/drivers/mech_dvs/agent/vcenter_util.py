@@ -81,6 +81,9 @@ class _DVSPortDesc(object):
         return chain.from_iterable(getattr(cls2, '__slots__', tuple()) for cls2 in cls.__mro__)
 
     def update(self, source):
+        if not source:
+            return
+
         for slot in self._slots():
             if hasattr(source, slot):
                 setattr(self, getattr(source, slot))
@@ -274,7 +277,6 @@ class VCenterMonitor(multiprocessing.Process):
                         mac_address = getattr(v, 'macAddress', None)
 
                         if mac_address:
-
                             port = getattr(v.backing, 'port', None)
                             if port:
                                 mac_address = str(v.macAddress)
@@ -405,18 +407,18 @@ class VCenter(object):
         port_setting = getattr(port_config, "setting", None)
         if port_setting:
             vlan = getattr(port_setting, "vlan", None)
-            if vlan and  vlan.vlanId:
+            if vlan and vlan.vlanId:
                 port_desc.vlan_id = vlan.vlanId
 
             filter_policy = getattr(port_setting, "filterPolicy", None)
-            filter_config = getattr(filter_policy, "filterConfig", None)
-
             if filter_policy:
-                port_desc.filter_config_key = filter_config[0].key
+                filter_config = getattr(filter_policy, "filterConfig", None)
+                if filter_config:
+                    port_desc.filter_config_key = filter_config[0].key
 
         port_state = getattr(port_info, "state", None)
         if port_state:
-            runtime_info = getattr(port_state, "runtimeInfo", None)
+            runtime_info = getattr(port_state, "runtimeInfo", {})
             port_desc.link_up = getattr(runtime_info, "linkUp", None)
 
         return True
@@ -517,8 +519,8 @@ class VCenter(object):
                 port = ports_by_key[port_info.key]
                 port_desc = port['port_desc']
                 if VCenter.update_port_desc(port, port_info):
-                    state = getattr(port_info, "state", None)
-                    runtime_info = getattr(state, "runtimeInfo", None)
+                    state = getattr(port_info, "state", {})
+                    runtime_info = getattr(state, "runtimeInfo", {})
                     if getattr(runtime_info, "linkUp", False):
                         LOG.error("Port Link Down: {}".format(port_info.key))
                 else:
@@ -571,10 +573,11 @@ def main():
         configs = []
         for port in ports:
             cookie = getattr(port, 'connectionCookie', None)
-            name = getattr(port.config, 'name', None)
-            description = getattr(port.config, 'description', None)
+            port_config =  getattr(port, 'config', {})
+            name = getattr(port_config, 'name', None)
+            description = getattr(port_config, 'description', None)
             if not cookie and (name or description):
-                configs.append(builder.port_config_spec(port.key, version=port.config.configVersion, name='', description=''))
+                configs.append(builder.port_config_spec(port.key, version=port_config.configVersion, name='', description=''))
 
         if configs:
             dvs.update_ports(configs)
