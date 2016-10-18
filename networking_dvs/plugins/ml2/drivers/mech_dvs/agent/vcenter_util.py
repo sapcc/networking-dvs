@@ -61,7 +61,7 @@ class _DVSPortDesc(object):
 
     def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
                  mac_address=None, connection_cookie=None, connected=None, status=None,
-                 config_version=None, vlan_id=None, link_up=None):
+                 config_version=None, vlan_id=None, link_up=None, filter_config_key=None):
         self.dvs_uuid = dvs_uuid
         self.port_key = port_key
         self.port_group_key = port_group_key
@@ -72,6 +72,7 @@ class _DVSPortDesc(object):
         self.config_version = config_version
         self.vlan_id = vlan_id
         self.link_up = link_up
+        self.filter_config_key = filter_config_key
 
     def is_connected(self):
         return self.connected and self.status == 'ok'
