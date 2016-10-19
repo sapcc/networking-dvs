@@ -193,32 +193,32 @@ class VCenterMonitor(multiprocessing.Process):
     def _run(self, config):
         LOG.info(_LI("Monitor running... "))
         connection = _create_session(config)
+        try:
+            vim = connection.vim
+            builder = SpecBuilder(vim.client.factory)
 
-        vim = connection.vim
-        builder = SpecBuilder(vim.client.factory)
+            version = None
+            wait_options = builder.wait_options(1, 20)
 
-        version = None
-        wait_options = builder.wait_options(1, 20)
+            property_collector = self._create_property_collector(connection)
+            self._create_property_filter(connection, property_collector)
 
-        property_collector = self._create_property_collector(connection)
-        self._create_property_filter(connection, property_collector)
+            while not self._quit_event.is_set():
+                result = connection.invoke_api(vim, 'WaitForUpdatesEx', property_collector,
+                                               version=version, options=wait_options)
+                self.iteration += 1
+                if result:
+                    version = result.version
+                    if result.filterSet and result.filterSet[0].objectSet:
+                        for update in result.filterSet[0].objectSet:
+                            if update.obj._type == 'VirtualMachine':
+                                self._handle_virtual_machine(update)
 
-        while not self._quit_event.is_set():
-            result = connection.invoke_api(vim, 'WaitForUpdatesEx', property_collector,
-                                           version=version, options=wait_options)
-            self.iteration += 1
-            if result:
-                version = result.version
-                if result.filterSet and result.filterSet[0].objectSet:
-                    for update in result.filterSet[0].objectSet:
-                        if update.obj._type == 'VirtualMachine':
-                            self._handle_virtual_machine(update)
-
-            now = datetime.utcnow()
-            for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
-                print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
-
-        connection.logout
+                now = datetime.utcnow()
+                for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
+                    print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+        finally:
+            connection.logout
 
     @staticmethod
     def _create_property_filter(connection, property_collector):

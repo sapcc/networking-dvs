@@ -365,17 +365,19 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
 
 def main():
-    import sys
-    common_config.init(sys.argv[1:])
-    common_config.setup_logging()
+    try:
+        import sys
+        common_config.init(sys.argv[1:])
+        common_config.setup_logging()
 
-    agent = DvsNeutronAgent()
+        agent = DvsNeutronAgent()
 
-    # Start everything.
-    LOG.info(_LI("Agent initialized successfully, now running... "))
-    agent.daemon_loop()
-    print("Stopping")
-    agent.api.stop()
+        # Start everything.
+        LOG.info(_LI("Agent initialized successfully, now running... "))
+        agent.daemon_loop()
+    finally:
+        print("Stopping")
+        agent.api.stop()
 
 
 if __name__ == "__main__":
