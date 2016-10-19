@@ -175,7 +175,7 @@ class VCenterMonitor(multiprocessing.Process):
     def __init__(self, config, queue=None, quit_event=None, error_queue=None):
         self._quit_event = quit_event or mpq.Event()
         self.queue = queue or mpq.Queue()
-        self.error_queue = error_queue or mpq.Queue()
+        self.error_queue = error_queue
         self.down_ports = {}
         self.untried_ports = {} # The host is simply down
         self.iteration = 0
@@ -215,6 +215,12 @@ class VCenterMonitor(multiprocessing.Process):
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
         finally:
+            if self.queue:
+                self.queue.close()
+                self.queue.cancel_join_thread()
+            if self.error_queue:
+                self.error_queue.close()
+                self.error_queue.cancel_join_thread()
             connection.logout
 
     @staticmethod
@@ -345,7 +351,7 @@ class VCenterMonitor(multiprocessing.Process):
                 status = port_desc.status
                 print("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
-                if status == 'unrecoverableError':
+                if status == 'unrecoverableError' and self.error_queue:
                     self._put(self.error_queue, port_desc)
 
     def _put(self, queue, port_desc):
@@ -540,9 +546,16 @@ class VCenter(object):
 
     def stop(self, *args):
         self.quit_event.set()
-        self._monitor_process.join(1.0)
-        self._monitor_process.terminate()
 
+        try:
+            while True:
+                self._monitor_process.queue.get_nowait()
+        except mpq.Empty:
+            pass
+
+        self._monitor_process.join(1.0)
+        if self._monitor_process.is_alive():
+            self._monitor_process.terminate()
 
 # Small test routine
 def main():
