@@ -92,7 +92,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            print("DVS {} {}".format(dvs_uuid, [port['id'] for port in port_list]))
+            print("DVS {} {}".format(dvs_uuid, [port.get('id', port.get('device_id', 'Missing')) for port in port_list]))
             while port_list:
                 sub_list = []
                 rules = 0
