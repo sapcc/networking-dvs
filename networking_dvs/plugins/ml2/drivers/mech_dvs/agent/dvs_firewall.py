@@ -98,8 +98,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 rules = 0
                 while rules < 500 and port_list:
                     port = port_list.pop()
-                    sub_list.append(port)
-                    rules += len(port['security_group_rules'])
+                    security_group_rules = port.get('security_group_rules', None)
+                    if security_group_rules:
+                        sub_list.append(port)
+                        rules += len(port['security_group_rules'])
 
                 sg_util.update_port_rules(dvs, sub_list)
 
