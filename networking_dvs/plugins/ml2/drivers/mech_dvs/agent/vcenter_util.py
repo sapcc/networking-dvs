@@ -540,6 +540,8 @@ class VCenter(object):
 
     def stop(self, *args):
         self.quit_event.set()
+        self._monitor_process.join(1.0)
+        self._monitor_process.terminate()
 
 
 # Small test routine
