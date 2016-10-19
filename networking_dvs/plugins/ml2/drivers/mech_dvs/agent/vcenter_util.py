@@ -24,10 +24,7 @@ from oslo_service  import loopingcall
 from oslo_vmware import vim_util, api as vmwareapi
 from oslo_vmware import exceptions as vmware_exceptions
 
-try:
-    import multiprocessing.Queue as mpq
-except:
-    import multiprocessing.queues as mqp
+import multiprocessing.queues as mpq
 
 from networking_dvs.common import config as dvs_config, constants as dvs_const
 from networking_dvs.utils import dvs_util
@@ -176,9 +173,9 @@ class SpecBuilder(dvs_util.SpecBuilder):
 
 class VCenterMonitor(multiprocessing.Process):
     def __init__(self, config, queue=None, quit_event=None, error_queue=None):
-        self._quit_event = quit_event or multiprocessing.Event()
-        self.queue = queue or multiprocessing.Queue()
-        self.error_queue = error_queue or multiprocessing.Queue()
+        self._quit_event = quit_event or mpq.Event()
+        self.queue = queue or mpq.Queue()
+        self.error_queue = error_queue or mpq.Queue()
         self.down_ports = {}
         self.untried_ports = {} # The host is simply down
         self.iteration = 0
@@ -252,6 +249,7 @@ class VCenterMonitor(multiprocessing.Process):
 
         return _property_collector
 
+
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
         for port_desc in six.itervalues(vm_hw):
@@ -261,7 +259,7 @@ class VCenterMonitor(multiprocessing.Process):
                 print("Removed {} {}".format(mac_address, port_desc.port_key))
                 self.down_ports.pop(mac_address, None)
                 self.untried_ports.pop(mac_address, None)
-                self.queue.put(port_desc)
+                self._put(self.queue, port_desc)
 
     def _handle_virtual_machine(self, update):
         vm = update.obj.value  # vmobref (vm-#)
@@ -329,7 +327,7 @@ class VCenterMonitor(multiprocessing.Process):
         now = datetime.utcnow()
         mac_address = port_desc.mac_address
         if port_desc.is_connected():
-            self.queue.put(port_desc)
+            self._put(self.queue, port_desc)
             then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
@@ -348,7 +346,15 @@ class VCenterMonitor(multiprocessing.Process):
                 print("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
                 if status == 'unrecoverableError':
-                    self.error_queue.put(port_desc)
+                    self._put(self.error_queue, port_desc)
+
+    def _put(self, queue, port_desc):
+        while not self._quit_event.is_set():
+            try:
+                queue.put(port_desc, True, 0.1)
+            except mpq.Full:
+                continue
+            break
 
 
 class VCenter(object):
@@ -508,7 +514,7 @@ class VCenter(object):
                             }, 'mac_address': port_desc.mac_address}
                     })
                     ports_by_mac[port_desc.mac_address] = port
-        except mqp.Empty:
+        except mpq.Empty:
             pass
 
         ports_by_switch_and_key = self.ports_by_switch_and_key(six.itervalues(ports_by_mac))
