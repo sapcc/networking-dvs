@@ -498,11 +498,11 @@ class VCenter(object):
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
 
-    def get_new_ports(self, block=False, timeout=1.0):
+    def get_new_ports(self, block=False, timeout=1.0, max_ports=None):
         ports_by_mac = defaultdict(dict)
 
         try:
-            while True:
+            while max_ports is None or len(ports_by_mac) < max_ports:
                 port_desc = self._monitor_process.queue.get(block=block, timeout=timeout)
                 if port_desc.status == 'deleted':
                     ports_by_mac.pop(port_desc.mac_address, None)

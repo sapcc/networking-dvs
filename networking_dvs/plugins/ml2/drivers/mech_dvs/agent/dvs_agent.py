@@ -205,7 +205,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _scan_ports(self):
         try:
             start = time.clock()
-            ports_by_mac = self.api.get_new_ports()
+            ports_by_mac = self.api.get_new_ports(block=False, max_ports=25)
             macs = set(six.iterkeys(ports_by_mac))
             if not macs:
                 LOG.debug(_LI("Scan 0 ports completed in {} seconds".format(time.clock() - start)))
