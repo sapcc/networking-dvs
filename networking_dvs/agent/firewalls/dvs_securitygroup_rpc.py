@@ -21,7 +21,7 @@ LOG = logging.getLogger(__name__)
 
 
 class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
-    def prepare_devices_filter(self, device_ids, chunk_size=250):
+    def prepare_devices_filter(self, device_ids, chunk_size=50):
         if not device_ids:
             return
         LOG.info(_LI("Preparing filters for devices %s"), device_ids)
@@ -39,7 +39,7 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
         LOG.info(_LI("Remove device filter for %r"), device_ids)
         self.firewall.remove_port_filter(device_ids)
 
-    def refresh_firewall(self, device_ids=None, chunk_size=250):
+    def refresh_firewall(self, device_ids=None, chunk_size=50):
         LOG.info(_LI("Refresh firewall rules for '{}'").format(device_ids))
         if not device_ids:
             device_ids = self.firewall.ports.keys()
