@@ -537,9 +537,6 @@ class VCenter(object):
                     if getattr(runtime_info, "linkUp", False):
                         LOG.error("Port Link Down: {}".format(port_info.key))
                 else:
-                    LOG.error("Cookie mismatch: {} {} {} <> {}, Removing port {}".
-                              format(getattr(port_info, 'connectionCookie', None), port_desc.connection_cookie,
-                                     port_desc.mac_address, port_desc.port_key, port.get('id', port.keys)))
                     ports_by_mac.pop(port_desc.mac_address)
 
         return ports_by_mac

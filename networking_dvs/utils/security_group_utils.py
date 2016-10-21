@@ -275,9 +275,11 @@ def update_port_rules(dvs, ports):
                     port_key = str(port_info.key)
                     port = ports_by_key[port_key]
                     port_desc = port['port_desc']
-                    if getattr(port_info, "connectionCookie", None) != port_desc.connection_cookie:
-                        LOG.warning("Different cookie then expected: Got {}, Expected {}".
-                                    format(getattr(port_info, "connectionCookie", None), port_desc.connection_cookie))
+                    connection_cookie = getattr(port_info, "connectionCookie", None)
+                    if connection_cookie != port_desc.connection_cookie:
+                        LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
+                                                                          port_desc.connection_cookie,
+                                                                          connection_cookie))
                         ports.remove(port)
                     else:
                         port_desc.config_version = port_info.config.configVersion
