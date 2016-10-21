@@ -255,7 +255,6 @@ class VCenterMonitor(multiprocessing.Process):
 
         return _property_collector
 
-
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
         for port_desc in six.itervalues(vm_hw):
@@ -279,29 +278,27 @@ class VCenterMonitor(multiprocessing.Process):
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
                     for v in change.val[0]:
+                        port = getattr(v.backing, 'port', None)
                         mac_address = getattr(v, 'macAddress', None)
+                        if port:
+                            mac_address = str(mac_address)
+                            connectable = getattr(v, 'connectable', None)
+                            device_key=int(v.key)
 
-                        if mac_address:
-                            port = getattr(v.backing, 'port', None)
-                            if port:
-                                mac_address = str(v.macAddress)
-                                connectable = getattr(v, "connectable", None)
-                                device_key=int(v.key)
+                            port_desc = _DVSPortMonitorDesc(
+                                mac_address=mac_address,
+                                connected=connectable.connected if connectable else None,
+                                status=str(connectable.status) if connectable else None,
+                                port_key=str(getattr(port, 'portKey', None)),
+                                port_group_key=str(port.portgroupKey),
+                                dvs_uuid=str(port.switchUuid),
+                                connection_cookie=int(getattr(port, "connectionCookie", 0)),
+                                vm=vm,
+                                device_key=device_key
+                                )
 
-                                port_desc = _DVSPortMonitorDesc(
-                                    mac_address=mac_address,
-                                    connected=connectable.connected if connectable else None,
-                                    status=str(connectable.status) if connectable else None,
-                                    port_key=str(getattr(port, "portKey", None)),
-                                    port_group_key=str(port.portgroupKey),
-                                    dvs_uuid=str(port.switchUuid),
-                                    connection_cookie=int(getattr(port, "connectionCookie", 0)),
-                                    vm=vm,
-                                    device_key=device_key
-                                    )
-
-                                vm_hw[port_desc.device_key] = port_desc
-                                self._handle_port_update(port_desc)
+                            vm_hw[port_desc.device_key] = port_desc
+                            self._handle_port_update(port_desc)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vm)
             elif change_name.startswith("config.hardware.device["):
@@ -314,6 +311,8 @@ class VCenterMonitor(multiprocessing.Process):
                         port_desc.connected = change.val
                     elif "connectable.status" == attribute:
                         port_desc.status = change.val
+                    elif "macAddress" == attribute:
+                        port_desc.mac_address = str(change.val)
                     self._handle_port_update(port_desc)
             elif change_name == 'runtime.powerState':
                 # print("{}: {}".format(vm, change.val))
@@ -332,6 +331,10 @@ class VCenterMonitor(multiprocessing.Process):
     def _handle_port_update(self, port_desc):
         now = datetime.utcnow()
         mac_address = port_desc.mac_address
+
+        if not mac_address:
+            return
+
         if port_desc.is_connected():
             self._put(self.queue, port_desc)
             then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
@@ -341,8 +344,7 @@ class VCenterMonitor(multiprocessing.Process):
                                                                (now - then).total_seconds(),
                                                                (self.iteration - iteration)))
             else:
-                pass
-                # print("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+                print("Port {} {} came up connected".format(mac_address, port_desc.port_key))
         else:
             power_state = self._hardware_map[port_desc.vm].get('power_state', None)
             if power_state != 'poweredOn':
