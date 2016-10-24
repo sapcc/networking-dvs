@@ -2,7 +2,7 @@ import six
 from collections import defaultdict
 
 from neutron.agent import firewall
-from neutron.i18n import _LW, _LI
+from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
@@ -61,12 +61,12 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port_id = port['id']
             stored = self.v_center.uuid_port_map.get(port_id, None)
             if stored:
-                print("Found port   {}".format(port_id))
+                # print("Found port  {}".format(port_id))
                 dict_merge(stored, port)
                 stored_ports.append(stored)
                 self._ports_by_device_id[stored['device']] = stored
             else:
-                print("Unknown port {}".format(port_id))
+                LOG.error(_LE("Unknown port {}").format(port_id))
         self._apply_sg_rules_for_port(stored_ports)
 
     def _remove_sg_from_dvs_port(self, port_ids):

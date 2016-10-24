@@ -72,7 +72,7 @@ class _DVSPortDesc(object):
         self.filter_config_key = filter_config_key
 
     def is_connected(self):
-        return self.connected and self.status == 'ok'
+        return self.mac_address and self.connected and self.status == 'ok'
 
     @classmethod
     def _slots(cls):
@@ -174,6 +174,7 @@ class SpecBuilder(dvs_util.SpecBuilder):
 class VCenterMonitor(multiprocessing.Process):
     def __init__(self, config, queue=None, quit_event=None, error_queue=None):
         self._quit_event = quit_event or mpq.Event()
+        self.changed = set()
         self.queue = queue or mpq.Queue()
         self.error_queue = error_queue
         self.down_ports = {}
@@ -210,6 +211,11 @@ class VCenterMonitor(multiprocessing.Process):
                         for update in result.filterSet[0].objectSet:
                             if update.obj._type == 'VirtualMachine':
                                 self._handle_virtual_machine(update)
+
+
+                for port_desc in self.changed:
+                    self._put(self.queue, port_desc)
+                self.changed.clear()
 
                 now = datetime.utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
@@ -265,7 +271,7 @@ class VCenterMonitor(multiprocessing.Process):
                 print("Removed {} {}".format(mac_address, port_desc.port_key))
                 self.down_ports.pop(mac_address, None)
                 self.untried_ports.pop(mac_address, None)
-                self._put(self.queue, port_desc)
+                self.changed.add(port_desc)
 
     def _handle_virtual_machine(self, update):
         vm = update.obj.value  # vmobref (vm-#)
@@ -279,10 +285,11 @@ class VCenterMonitor(multiprocessing.Process):
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
                     for v in change.val[0]:
-                        port = getattr(v.backing, 'port', None)
-                        mac_address = getattr(v, 'macAddress', None)
-                        if port:
-                            mac_address = str(mac_address)
+                        try:
+                            port = v.backing.port # If if is not a NIC, it will have no backing and/or port
+                            mac_address = getattr(v, 'macAddress', None)
+                            if mac_address:
+                                mac_address = str(mac_address)
                             connectable = getattr(v, 'connectable', None)
                             device_key=int(v.key)
 
@@ -300,6 +307,8 @@ class VCenterMonitor(multiprocessing.Process):
 
                             vm_hw[port_desc.device_key] = port_desc
                             self._handle_port_update(port_desc)
+                        except AttributeError:
+                            pass
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vm)
             elif change_name.startswith("config.hardware.device["):
@@ -310,11 +319,14 @@ class VCenterMonitor(multiprocessing.Process):
                     attribute = change_name[id_end + 2:]
                     if "connectable.connected" == attribute:
                         port_desc.connected = change.val
+                        self._handle_port_update(port_desc)
                     elif "connectable.status" == attribute:
                         port_desc.status = change.val
+                        self._handle_port_update(port_desc)
                     elif "macAddress" == attribute:
                         port_desc.mac_address = str(change.val)
-                    self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc)
+
             elif change_name == 'runtime.powerState':
                 # print("{}: {}".format(vm, change.val))
                 vm_hw['power_state'] = change.val
@@ -337,15 +349,15 @@ class VCenterMonitor(multiprocessing.Process):
             return
 
         if port_desc.is_connected():
-            self._put(self.queue, port_desc)
             then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
                 print("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
                                                                (now - then).total_seconds(),
                                                                (self.iteration - iteration)))
-            else:
+            elif not port_desc in self.changed:
                 print("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+            self.changed.add(port_desc)
         else:
             power_state = self._hardware_map[port_desc.vm].get('power_state', None)
             if power_state != 'poweredOn':
