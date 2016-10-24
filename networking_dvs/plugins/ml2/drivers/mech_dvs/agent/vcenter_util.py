@@ -481,17 +481,7 @@ class VCenter(object):
                     ports_down.append(port)
                     LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), port["port_id"])
 
-            try:
-                result = dvs.update_ports(specs)
-                if result.state != "success":
-                    LOG.warning("Binding did not succeed")
-            except vmware_exceptions.VimFaultException as e:
-                LOG.debug(e.msg)
-                if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
-                    # TODO: We would have to validate, that the port key still pointing to the same port
-                    pass
-                else:
-                    raise e
+            dvs.update_ports_checked(ports, specs)
 
             for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
                 port_key = str(port_info.key)

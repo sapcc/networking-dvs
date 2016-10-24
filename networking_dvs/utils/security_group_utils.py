@@ -254,40 +254,11 @@ def build_port_rules(builder, ports, hashed_rules = None):
 def update_port_rules(dvs, ports):
     if not ports:
         return
-    for i in range(5):
-        try:
-            builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
-            hashed_rules = {}
-            port_config_list = build_port_rules(builder, ports, hashed_rules)
 
-            if port_config_list:
-                return dvs.update_ports(port_config_list)
-        except vmware_exceptions.VimException as e:
-            if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
-                ports_by_key = {}
-                for port in ports:
-                    port_desc = port.get('port_desc', None)
-                    if port_desc:
-                        ports_by_key[port_desc.port_key] = port
-
-                # View is not sufficient -> list(iter)
-                for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
-                    port_key = str(port_info.key)
-                    port = ports_by_key[port_key]
-                    port_desc = port['port_desc']
-                    connection_cookie = getattr(port_info, "connectionCookie", None)
-                    if connection_cookie != port_desc.connection_cookie:
-                        LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
-                                                                          port_desc.connection_cookie,
-                                                                          connection_cookie))
-                        ports.remove(port)
-                    else:
-                        port_desc.config_version = port_info.config.configVersion
-                continue
-            if 'The object or item referred to could not be found' in str(e):
-                return
-            else:
-                raise exceptions.wrap_wmvare_vim_exception(e)
+    builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
+    hashed_rules = {}
+    port_config_list = build_port_rules(builder, ports, hashed_rules)
+    dvs.update_ports_checked(ports, port_config_list)
 
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):
