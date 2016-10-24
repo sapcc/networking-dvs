@@ -87,7 +87,7 @@ class DVSController(object):
             if (pg_config_info.defaultPortConfig.blocked.value != blocked or
                     (original and original['name'] != network['name'])):
                 # we upgrade only defaultPortConfig, because it is inherited
-                # by all ports in PortGroup, unless they are explicite
+                # by all ports in PortGroup, unless they are explicitly
                 # overwritten on specific port.
                 pg_spec = self._build_pg_update_spec(
                     pg_config_info.configVersion,

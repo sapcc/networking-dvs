@@ -213,7 +213,8 @@ class VCenterMonitor(multiprocessing.Process):
 
                 now = datetime.utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
-                    print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+                    if port_desc.status != 'untried' or 0 == self.iteration - iteration:
+                        print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
         finally:
             if self.queue:
                 self.queue.close()

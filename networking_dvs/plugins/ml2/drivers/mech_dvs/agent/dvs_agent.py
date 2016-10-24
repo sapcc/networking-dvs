@@ -208,7 +208,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
             macs = set(six.iterkeys(ports_by_mac))
             if not macs:
-                LOG.debug(_LI("Scan 0 ports completed in {} seconds".format(time.clock() - start)))
+                LOG.debug(_LI("Scan 0 ports completed"))
             else:
                 print("Looking for {} macs".format(len(macs)))
                 neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
