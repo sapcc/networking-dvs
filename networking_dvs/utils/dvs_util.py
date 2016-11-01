@@ -148,24 +148,29 @@ class DVSController(object):
             self._dvs, port=update_specs)
 
     def update_ports(self, update_specs):
-        LOG.debug("Update Ports:\n{} {}\n".format(update_specs[0].setting.filterPolicy.inherited, sorted([spec.key for spec in update_specs])))
+        LOG.debug("Update Ports: {} {}".format(update_specs[0].setting.filterPolicy.inherited, sorted([spec.key for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         return self.connection.wait_for_task(update_task)  # -> May raise DvsOperationBulkFault, when host is down
 
     def update_ports_checked(self, ports, update_specs, retries=5):
         ports_by_key = {}
+        for port in ports:
+            port_desc = port.get('port_desc', None)
+            if port_desc:
+                ports_by_key[port_desc.port_key] = port
 
         for i in range(retries):
             try:
-                return self.update_ports(update_specs)
+                value = self.update_ports(update_specs)
+                for spec in update_specs:
+                    port = ports_by_key[spec.key]
+                    port_desc = port.get('port_desc', None)
+                    if port_desc and port_desc.config_version:
+                        port_desc.config_version = str(int(port_desc.config_version) + 1)
+
+                return value
             except vmware_exceptions.VimException as e:
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
-                    if not ports_by_key:
-                        for port in ports:
-                            port_desc = port.get('port_desc', None)
-                            if port_desc:
-                                ports_by_key[port_desc.port_key] = port
-
                     for port_info in self.get_port_info_by_portkey([spec.key for spec in update_specs]):
                         port_key = str(port_info.key)
                         port = ports_by_key[port_key]

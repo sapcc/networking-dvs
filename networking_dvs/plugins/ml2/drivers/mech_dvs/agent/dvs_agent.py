@@ -13,15 +13,17 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import os
+if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
+    import eventlet
+
+    eventlet.monkey_patch()
 
 import collections
 import signal
 import six
 import time
 
-import eventlet
-
-eventlet.monkey_patch()
 from oslo_utils import timeutils
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -214,7 +216,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 with timeutils.StopWatch() as w:
                     neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
                                                                          host=self.conf.host)
-                LOG.info("get_devices_details_list took {:1.3g}s".format(w.elapsed()))
+                LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
 
                 for neutron_info in neutron_ports:
                     if neutron_info:
@@ -238,19 +240,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             LOG.exception(_LE("Failed to get ports via RPC"))
             return []
 
-    def loop_count_and_wait(self, start_time, port_stats):
+    def loop_count_and_wait(self, elapsed):
         # sleep till end of polling interval
-        elapsed = time.clock() - start_time
-
-        # LOG.debug("Agent rpc_loop - iteration:%(iter_num)d "
-        #           "completed. Processed ports statistics: "
-        #           "%(port_stats)s. Elapsed:%(elapsed).3f",
-        #           {'iter_num': self.iter_num,
-        #            'port_stats': port_stats,
-        #            'elapsed': elapsed})
-
         if elapsed < self.polling_interval:
-            time.sleep(self.polling_interval - elapsed)
+            eventlet.sleep(self.polling_interval - elapsed)
         else:
             LOG.debug("Loop iteration exceeded interval "
                       "(%(polling_interval)s vs. %(elapsed)s)!",
@@ -321,14 +314,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                     port_up_ids.append(port_id)
                     updated_ports[port_id] = port
                     self.unbound_ports.pop(port_id, None)
-            LOG.info("bind_ports took {:1.3g}s".format(w.elapsed()))
+            LOG.info(_LI("bind_ports took {:1.3g}s").format(w.elapsed()))
 
         if port_up_ids or port_down_ids:
             with timeutils.StopWatch() as w:
-                LOG.debug("Update {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
+                LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                   self.agent_id, self.conf.host))
                 self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
-            LOG.info("update_device_list took {:1.3g}s".format(w.elapsed()))
+            LOG.info(_LI("update_device_list took {:1.3g}s").format(w.elapsed()))
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -343,12 +336,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         # update firewall agent if we have added or updated ports
         if self.sg_agent and (updated_ports or added_ports):
-            with timeutils.StopWatch() as w:
-                # LOG.debug("Calling setup_port_filters")
-                added_ports -= six.viewkeys(self.unbound_ports)
-                updated_ports = six.viewkeys(updated_ports) - added_ports
-                self.sg_agent.setup_port_filters(added_ports, updated_ports)
-            LOG.info("setup_port_filters took {:1.3g}s".format(w.elapsed()))
+            # LOG.debug("Calling setup_port_filters")
+            added_ports -= six.viewkeys(self.unbound_ports)
+            updated_ports = six.viewkeys(updated_ports) - added_ports
+            eventlet.spawn_n(self.sg_agent.setup_port_filters, added_ports, updated_ports)
 
         return {
             'added': len(added_ports),
@@ -358,9 +349,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def rpc_loop(self):
         while self._check_and_handle_signal():
-            start = time.clock()
-            port_stats = {'regular': self.process_ports()}
-            self.loop_count_and_wait(start, port_stats)
+            with timeutils.StopWatch() as w:
+                self.process_ports()
+            self.loop_count_and_wait(w.elapsed())
 
     def daemon_loop(self):
         # Start everything.
@@ -384,7 +375,7 @@ def main():
         LOG.info(_LI("Agent initialized successfully, now running... "))
         agent.daemon_loop()
     finally:
-        print("Stopping")
+        LOG.info(_LI("Stopping"))
         agent.api.stop()
 
 

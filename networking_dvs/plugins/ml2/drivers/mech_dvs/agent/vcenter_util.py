@@ -32,6 +32,7 @@ from itertools import chain
 import multiprocessing
 
 CONF = dvs_config.CONF
+
 LOG = log.getLogger(__name__)
 
 
@@ -167,8 +168,6 @@ class SpecBuilder(dvs_util.SpecBuilder):
             virtual_machine_config_spec.changeVersion = change_version
 
         return virtual_machine_config_spec
-
-
 
 
 class VCenterMonitor(multiprocessing.Process):
@@ -352,11 +351,11 @@ class VCenterMonitor(multiprocessing.Process):
             then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
-                print("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
+                LOG.debug("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
                                                                (now - then).total_seconds(),
                                                                (self.iteration - iteration)))
             elif not port_desc in self.changed:
-                print("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+                LOG.debug("Port {} {} came up connected".format(mac_address, port_desc.port_key))
             self.changed.add(port_desc)
         else:
             power_state = self._hardware_map[port_desc.vm].get('power_state', None)
@@ -364,7 +363,7 @@ class VCenterMonitor(multiprocessing.Process):
                 self.untried_ports[mac_address] = port_desc
             elif not port_desc in self.down_ports:
                 status = port_desc.status
-                print("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
+                LOG.debug("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
                 if status == 'unrecoverableError' and self.error_queue:
                     self._put(self.error_queue, port_desc)
