@@ -559,6 +559,7 @@ class VCenter(object):
         if self._monitor_process.is_alive():
             self._monitor_process.terminate()
 
+
 # Small test routine
 def main():
     import sys
@@ -581,7 +582,6 @@ def main():
         ports = util.get_new_ports(True, 1.0)
     print(ports)
     print(w.elapsed())
-
 
     for dvs in six.itervalues(util.uuid_dvs_map):
         builder = SpecBuilder(dvs.connection.vim.client.factory)

@@ -22,7 +22,7 @@ import time
 import eventlet
 
 eventlet.monkey_patch()
-
+from oslo_utils import timeutils
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
@@ -210,8 +210,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             if not macs:
                 LOG.debug(_LI("Scan 0 ports completed"))
             else:
-                neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
+                neutron_ports = None
+                with timeutils.StopWatch() as w:
+                    neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
                                                                          host=self.conf.host)
+                LOG.info("get_devices_details_list took {:1.3g}s".format(w.elapsed()))
 
                 for neutron_info in neutron_ports:
                     if neutron_info:
@@ -305,23 +308,27 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
-            ports_up, ports_down = self.api.bind_ports(ports_to_bind)
-            for port in ports_down:
-                port_id = port["port_id"]
-                port_down_ids.append(port_id)
-                # Updating the port will trigger a security group update conflicting with a subsequent configuration
-                # updated_ports[port_id] = port
-                self.unbound_ports[port_id] = port
-            for port in ports_up:
-                port_id = port["port_id"]
-                port_up_ids.append(port_id)
-                updated_ports[port_id] = port
-                self.unbound_ports.pop(port_id, None)
+            with timeutils.StopWatch() as w:
+                ports_up, ports_down = self.api.bind_ports(ports_to_bind)
+                for port in ports_down:
+                    port_id = port["port_id"]
+                    port_down_ids.append(port_id)
+                    # Updating the port will trigger a security group update conflicting with a subsequent configuration
+                    # updated_ports[port_id] = port
+                    self.unbound_ports[port_id] = port
+                for port in ports_up:
+                    port_id = port["port_id"]
+                    port_up_ids.append(port_id)
+                    updated_ports[port_id] = port
+                    self.unbound_ports.pop(port_id, None)
+            LOG.info("bind_ports took {:1.3g}s".format(w.elapsed()))
 
         if port_up_ids or port_down_ids:
-            LOG.debug("Update {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
-                                                              self.agent_id, self.conf.host))
-            self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+            with timeutils.StopWatch() as w:
+                LOG.debug("Update {} down {} agent {} host {}".format(port_up_ids, port_down_ids,
+                                                                  self.agent_id, self.conf.host))
+                self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+            LOG.info("update_device_list took {:1.3g}s".format(w.elapsed()))
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -336,10 +343,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         # update firewall agent if we have added or updated ports
         if self.sg_agent and (updated_ports or added_ports):
-            # LOG.debug("Calling setup_port_filters")
-            added_ports -= six.viewkeys(self.unbound_ports)
-            updated_ports = six.viewkeys(updated_ports) - added_ports
-            self.sg_agent.setup_port_filters(added_ports, updated_ports)
+            with timeutils.StopWatch() as w:
+                # LOG.debug("Calling setup_port_filters")
+                added_ports -= six.viewkeys(self.unbound_ports)
+                updated_ports = six.viewkeys(updated_ports) - added_ports
+                self.sg_agent.setup_port_filters(added_ports, updated_ports)
+            LOG.info("setup_port_filters took {:1.3g}s".format(w.elapsed()))
 
         return {
             'added': len(added_ports),
