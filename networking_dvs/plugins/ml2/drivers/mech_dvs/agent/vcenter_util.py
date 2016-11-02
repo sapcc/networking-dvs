@@ -562,11 +562,6 @@ class VCenter(object):
 # Small test routine
 def main():
     import sys
-    try:
-        import multiprocessing.Queue as mpq
-    except:
-        import multiprocessing.queues as mqp
-
     from neutron.common import config as common_config
     from oslo_utils import timeutils
     common_config.init(sys.argv[1:])

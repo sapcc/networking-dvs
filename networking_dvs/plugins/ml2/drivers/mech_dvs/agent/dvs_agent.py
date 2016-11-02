@@ -62,6 +62,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         super(DvsNeutronAgent, self).__init__()
 
+        self.pool = eventlet.greenpool.GreenPool(size=10) # Start small, so we identify possible bottlenecks
+
         self.conf = conf or CONF
 
         self.agent_state = {
@@ -255,14 +257,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # LOG.info("******* Processing Ports *******")
         deleted_ports = self.deleted_ports.copy()
         if deleted_ports:
-            # Nothing really to do on the VCenter - we let the vcenter unplug - so all we need to do is
-            # trigger the firewall update and clear the deleted ports list
-            if self.sg_agent:
-                self.sg_agent.remove_devices_filter(deleted_ports)
             self.deleted_ports = self.deleted_ports - deleted_ports  # This way we miss fewer concurrent update
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
                 self.unbound_ports.pop(port_id, None)
+            # Nothing really to do on the VCenter - we let the vcenter unplug - so all we need to do is
+            # trigger the firewall update and clear the deleted ports list
+            if self.sg_agent:
+                self.pool.spawn_n(self.sg_agent.remove_devices_filter, deleted_ports)
 
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
@@ -317,11 +319,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             LOG.info(_LI("bind_ports took {:1.3g}s").format(w.elapsed()))
 
         if port_up_ids or port_down_ids:
-            with timeutils.StopWatch() as w:
-                LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
-                                                                  self.agent_id, self.conf.host))
-                self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
-            LOG.info(_LI("update_device_list took {:1.3g}s").format(w.elapsed()))
+            self.pool.spawn_n(self._update_device_list, port_down_ids, port_up_ids)
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -339,13 +337,20 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             # LOG.debug("Calling setup_port_filters")
             added_ports -= six.viewkeys(self.unbound_ports)
             updated_ports = six.viewkeys(updated_ports) - added_ports
-            eventlet.spawn_n(self.sg_agent.setup_port_filters, added_ports, updated_ports)
+            self.pool.spawn_n(self.sg_agent.setup_port_filters, added_ports, updated_ports)
 
         return {
             'added': len(added_ports),
             'updated': len(updated_ports),
             'removed': len(deleted_ports)
         }
+
+    def _update_device_list(self, port_down_ids, port_up_ids):
+        with timeutils.StopWatch() as w:
+            LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
+                                                                      self.agent_id, self.conf.host))
+            self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+        LOG.info(_LI("update_device_list took {:1.3g}s").format(w.elapsed()))
 
     def rpc_loop(self):
         while self._check_and_handle_signal():
