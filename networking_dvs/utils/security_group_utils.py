@@ -245,7 +245,9 @@ def build_port_rules(builder, ports, hashed_rules = None):
 
         if key:
             port_config = port_configuration(
-                builder, key, port['security_group_rules'], hashed_rules, version=version, filter_config_key=filter_config_key)
+                builder, key, port['security_group_rules'], hashed_rules,
+                version=version,
+                filter_config_key=filter_config_key)
             port_config_list.append(port_config)
     return port_config_list
 

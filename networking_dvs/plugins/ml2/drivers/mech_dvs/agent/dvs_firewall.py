@@ -71,15 +71,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def _remove_sg_from_dvs_port(self, port_ids):
         LOG.info(_LI("Clean up security group rules on deleted ports {}").format(port_ids))
-        ports = []
         for port_id in port_ids:
-            port = self.v_center.uuid_port_map.get(port_id, None)
-            if port:
-                ports.append(port)
-
             self._ports_by_device_id.pop(port_id, None)
-
-        self._apply_sg_rules_for_port(ports)
 
     @dvs_util.wrap_retry
     def _apply_sg_rules_for_port(self, ports):
@@ -105,7 +98,3 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
                 sg_util.update_port_rules(dvs, sub_list)
 
-                # The config version is in essence a counter.
-                for port in sub_list:
-                    port_desc = port['port_desc']
-                    port_desc.config_version = str(int(port_desc.config_version) + 1)

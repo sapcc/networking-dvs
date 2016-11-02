@@ -92,7 +92,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                                                         self.sg_plugin_rpc,
                                                         local_vlan_map=None,
                                                         integration_bridge=self.api,  # Passed on to FireWall Driver
-                                                        defer_refresh_firewall=False)
+                                                        defer_refresh_firewall=True) # Can only be false, if ...
+            # ... we keep track of all the security groups of a port, and probably more changes
 
         self.run_daemon_loop = True
         self.iter_num = 0
@@ -208,17 +209,17 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def _scan_ports(self):
         try:
-            start = time.clock()
-            ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
-            macs = set(six.iterkeys(ports_by_mac))
-            if not macs:
-                LOG.debug(_LI("Scan 0 ports completed"))
-            else:
-                neutron_ports = None
-                with timeutils.StopWatch() as w:
-                    neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs, agent_id=self.agent_id,
-                                                                         host=self.conf.host)
-                LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
+            with timeutils.StopWatch() as w2:
+                ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
+                macs = set(six.iterkeys(ports_by_mac))
+                if macs:
+                    with timeutils.StopWatch() as w:
+                        neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
+                                                                                 agent_id=self.agent_id,
+                                                                                 host=self.conf.host)
+                    LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
+                else:
+                    neutron_ports = []
 
                 for neutron_info in neutron_ports:
                     if neutron_info:
@@ -235,7 +236,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 if macs:
                     LOG.warning(_LW("Could not find the following macs: {}").format(macs))
 
-                LOG.debug(_LI("Scan {} ports completed in {} seconds (Missing {})".format(len(neutron_ports), time.clock() - start, len(macs))))
+            LOG.debug(_LI("Scan {} ports completed in {:1.3g}s (Missing {})".format(len(neutron_ports),
+                                                                                    w2.elapsed(),
+                                                                                    len(macs))))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
@@ -332,12 +335,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         for port in six.iterkeys(updated_ports):
             self.updated_ports.pop(port, None)
 
-        # update firewall agent if we have added or updated ports
-        if self.sg_agent and (updated_ports or added_ports):
-            # LOG.debug("Calling setup_port_filters")
+        # update firewall agent
+        if self.sg_agent:
+            # Needs to called, even if there is no added or updated ports, as it also executes the deferred updates
             added_ports -= six.viewkeys(self.unbound_ports)
             updated_ports = six.viewkeys(updated_ports) - added_ports
-            self.pool.spawn_n(self.sg_agent.setup_port_filters, added_ports, updated_ports)
+            self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
         return {
             'added': len(added_ports),

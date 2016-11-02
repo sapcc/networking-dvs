@@ -153,6 +153,7 @@ class DVSController(object):
         return self.connection.wait_for_task(update_task)  # -> May raise DvsOperationBulkFault, when host is down
 
     def update_ports_checked(self, ports, update_specs, retries=5):
+        update_specs = sorted(update_specs, key=lambda x: x.key)
         ports_by_key = {}
         for port in ports:
             port_desc = port.get('port_desc', None)
@@ -162,6 +163,7 @@ class DVSController(object):
         for i in range(retries):
             try:
                 value = self.update_ports(update_specs)
+
                 for spec in update_specs:
                     port = ports_by_key[spec.key]
                     port_desc = port.get('port_desc', None)
@@ -176,9 +178,11 @@ class DVSController(object):
                         port = ports_by_key[port_key]
                         port_desc = port['port_desc']
                         update_spec_index = None
+                        update_spec = None
 
                         for index, item in enumerate(update_specs):
                             if item.key == port_key:
+                                update_spec = item
                                 update_spec_index = index
                                 break
 
@@ -190,10 +194,16 @@ class DVSController(object):
                             if update_spec_index:
                                 del update_specs[update_spec_index]
                         else:
-                            config_version = port_info.config.configVersion
+                            config_version = str(port_info.config.configVersion)
                             port_desc.config_version = config_version
-                            if update_spec_index:
-                                update_specs[update_spec_index].configVersion = config_version
+                            if update_spec:
+                                LOG.debug("Config version {} {} from {} ({}) to {}".format(port_desc.mac_address,
+                                                                                           port_desc.port_key,
+                                                                                           port_desc.config_version,
+                                                                                           update_spec.configVersion,
+                                                                                           config_version))
+
+                                update_spec.configVersion = config_version
                     continue
 
                 if isinstance(e, vmware_exceptions.ManagedObjectNotFoundException):

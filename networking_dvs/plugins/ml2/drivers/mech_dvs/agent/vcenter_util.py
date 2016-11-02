@@ -54,26 +54,79 @@ def _create_session(config):
     return connection
 
 
+def _cast(value, _type=str):
+    if value is None:
+        return None
+    return _type(value)
+
+
 class _DVSPortDesc(object):
-    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status', 'config_version', 'vlan_id', 'link_up', 'filter_config_key', )
+    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status',
+                 'config_version', 'vlan_id', 'link_up', 'filter_config_key',)
 
     def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
                  mac_address=None, connection_cookie=None, connected=None, status=None,
                  config_version=None, vlan_id=None, link_up=None, filter_config_key=None):
-        self.dvs_uuid = dvs_uuid
-        self.port_key = port_key
-        self.port_group_key = port_group_key
-        self.mac_address = mac_address
-        self.connection_cookie = connection_cookie
+        self.dvs_uuid = _cast(dvs_uuid)
+        self.port_key = _cast(port_key)  # It is an int, but the WDSL defines it as a string
+        self.port_group_key = _cast(port_group_key)
+        self.mac_address = _cast(mac_address)
+        self.connection_cookie = _cast(connection_cookie)  # Same as with port_key, int which is represented as an int
         self.connected = connected
-        self.status = status
-        self.config_version = config_version
+        self.status = _cast(status)
+        self.config_version = _cast(config_version)
         self.vlan_id = vlan_id
         self.link_up = link_up
-        self.filter_config_key = filter_config_key
+        self.filter_config_key = _cast(filter_config_key)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
+
+    @staticmethod
+    def from_dvs_port(port, **values):
+        # Port can be either DistributedVirtualSwitchPortConnection, or DistributedVirtualPort
+        values.update(
+            # switchUuid in connection, dvsUuid in port
+            dvs_uuid=_cast(getattr(port, 'switchUuid', None) or getattr(port, 'dvsUuid', None)),
+            # switchUuid in connection, dvsUuid in port
+            # portKey in connection, key in port
+            port_key=getattr(port, 'portKey', None) or getattr(port, 'key', None),
+            port_group_key=_cast(port.portgroupKey),
+            connection_cookie=_cast(getattr(port, "connectionCookie", None)),
+        )
+        # The next ones are not part of DistributedVirtualSwitchPortConnection as returned by the backing.port,
+        # but a DistributedVirtualPort as returned by FetchDVPorts
+        port_config = getattr(port, 'config', None)
+        if port_config:
+            filter_config_key = None
+            vlan_id = None
+
+            setting = getattr(port_config, 'setting', None)
+            if setting:
+                vlan_id = _cast(getattr(getattr(setting, 'vlan', None), 'vlanId', None), int)
+
+            filter_policy = getattr(setting, "filterPolicy", None)
+            if filter_policy:
+                filter_config = getattr(filter_policy, "filterConfig", None)
+                if filter_config:
+                    filter_config_key = str(filter_config[0].key)
+
+            link_up = None
+            port_state = getattr(port, "state", None)
+            if port_state:
+                runtime_info = getattr(port_state, "runtimeInfo", {})
+                link_up = getattr(runtime_info, "linkUp", None)
+
+            values.update(config_version=_cast(port_config.configVersion),
+                          # name=_cast(port_config.name),
+                          # description=_cast(port_config.description),
+                          vlan_id=vlan_id,
+                          filter_config_key=filter_config_key,
+                          link_up=link_up
+                          )
+
+        return values
+
 
     @classmethod
     def _slots(cls):
@@ -83,21 +136,28 @@ class _DVSPortDesc(object):
         if not source:
             return
 
-        for slot in self._slots():
-            if hasattr(source, slot):
-                setattr(self, getattr(source, slot))
+        if isinstance(source, dict):
+            for slot in self._slots():
+                attr = source.get(slot, None)
+                if not attr is None:
+                    setattr(self, slot, source.get(slot))
+        else:
+            for slot in self._slots():
+                attr = getattr(source, slot, None)
+                if not attr is None:
+                    setattr(self, slot, attr)
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__, {s: getattr(self, s, None) for s in self._slots()})
 
 
 class _DVSPortMonitorDesc(_DVSPortDesc):
-    __slots__ = ('vm', 'device_key',)
+    __slots__ = ('vmobref', 'device_key',)
 
-    def __init__(self, vm=None, device_key=None, **kwargs):
+    def __init__(self, vmobref=None, device_key=None, **kwargs):
         super(_DVSPortMonitorDesc, self).__init__(**kwargs)
-        self.vm = vm
-        self.device_key = device_key
+        self.vmobref = str(vmobref)
+        self.device_key = int(device_key)
 
 
 class SpecBuilder(dvs_util.SpecBuilder):
@@ -273,43 +333,41 @@ class VCenterMonitor(multiprocessing.Process):
                 self.changed.add(port_desc)
 
     def _handle_virtual_machine(self, update):
-        vm = update.obj.value  # vmobref (vm-#)
+        vmobref = str(update.obj.value)  # String 'vmobref-#'
         change_set = getattr(update, 'changeSet', [])
 
         if update.kind != 'leave':
-            vm_hw = self._hardware_map[vm]
+            vm_hw = self._hardware_map[vmobref]
 
         for change in change_set:
             change_name = change.name
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
                     for v in change.val[0]:
-                        try:
-                            port = v.backing.port # If if is not a NIC, it will have no backing and/or port
-                            mac_address = getattr(v, 'macAddress', None)
-                            if mac_address:
-                                mac_address = str(mac_address)
-                            connectable = getattr(v, 'connectable', None)
-                            device_key=int(v.key)
+                        backing = getattr(v, 'backing', None)
+                        # If if is not a NIC, it will have no backing and/or port
+                        if not backing:
+                            continue
+                        port = getattr(backing, 'port', None)
+                        if not port:
+                            continue
+                        # port is a DistributedVirtualSwitchPortConnection
 
-                            port_desc = _DVSPortMonitorDesc(
-                                mac_address=mac_address,
-                                connected=connectable.connected if connectable else None,
-                                status=str(connectable.status) if connectable else None,
-                                port_key=str(getattr(port, 'portKey', None)),
-                                port_group_key=str(port.portgroupKey),
-                                dvs_uuid=str(port.switchUuid),
-                                connection_cookie=int(getattr(port, "connectionCookie", 0)),
-                                vm=vm,
-                                device_key=device_key
-                                )
+                        connectable = getattr(v, 'connectable', None)
 
-                            vm_hw[port_desc.device_key] = port_desc
-                            self._handle_port_update(port_desc)
-                        except AttributeError:
-                            pass
+                        port_desc = _DVSPortMonitorDesc(**_DVSPortDesc.from_dvs_port(
+                            port,
+                            mac_address=getattr(v, 'macAddress', None),
+                            connected=connectable.connected if connectable else None,
+                            status=connectable.status if connectable else None,
+                            vmobref=vmobref,
+                            device_key=v.key
+                            ))
+
+                        vm_hw[port_desc.device_key] = port_desc
+                        self._handle_port_update(port_desc)
                 elif "indirectRemove" == change.op:
-                    self._handle_removal(vm)
+                    self._handle_removal(vmobref)
             elif change_name.startswith("config.hardware.device["):
                 id_end = change_name.index("]")
                 device_key = int(change_name[23:id_end])
@@ -336,7 +394,7 @@ class VCenterMonitor(multiprocessing.Process):
                 LOG.debug(change)
 
         if update.kind == 'leave':
-            self._handle_removal(vm)
+            self._handle_removal(vmobref)
         else:
             pass
 
@@ -358,7 +416,7 @@ class VCenterMonitor(multiprocessing.Process):
                 LOG.debug("Port {} {} came up connected".format(mac_address, port_desc.port_key))
             self.changed.add(port_desc)
         else:
-            power_state = self._hardware_map[port_desc.vm].get('power_state', None)
+            power_state = self._hardware_map[port_desc.vmobref].get('power_state', None)
             if power_state != 'poweredOn':
                 self.untried_ports[mac_address] = port_desc
             elif not port_desc in self.down_ports:
@@ -420,33 +478,16 @@ class VCenter(object):
 
     @staticmethod
     def update_port_desc(port, port_info):
-        # TODO validate connectionCookie, so we still have the same instance behind that portKey
+        # Validate connectionCookie, so we still have the same instance behind that portKey
         port_desc = port['port_desc']
-        connection_cookie = getattr(port_info, 'connectionCookie', None)
+        connection_cookie = _cast(getattr(port_info, 'connectionCookie', None))
+
         if port_desc.connection_cookie != connection_cookie:
             LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
                                                               port_desc.connection_cookie, connection_cookie))
             return False
 
-        port_config = port_info.config
-
-        port_desc.config_version = port_config.configVersion
-        port_setting = getattr(port_config, "setting", None)
-        if port_setting:
-            vlan = getattr(port_setting, "vlan", None)
-            if vlan and vlan.vlanId:
-                port_desc.vlan_id = vlan.vlanId
-
-            filter_policy = getattr(port_setting, "filterPolicy", None)
-            if filter_policy:
-                filter_config = getattr(filter_policy, "filterConfig", None)
-                if filter_config:
-                    port_desc.filter_config_key = filter_config[0].key
-
-        port_state = getattr(port_info, "state", None)
-        if port_state:
-            runtime_info = getattr(port_state, "runtimeInfo", {})
-            port_desc.link_up = getattr(runtime_info, "linkUp", None)
+        port.update(_DVSPortDesc.from_dvs_port(port_info))
 
         return True
 
