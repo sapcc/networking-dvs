@@ -12,7 +12,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import atexit, signal
+import os
+if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
+    import eventlet
+    eventlet.monkey_patch()
+
+from eventlet.queue import Full, Empty, LightQueue as Queue
+from eventlet.event import Event
+
+import atexit
 import six
 from collections import defaultdict
 from datetime import datetime
@@ -20,20 +28,23 @@ from datetime import datetime
 from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
-from oslo_service  import loopingcall
-from oslo_vmware import vim_util, api as vmwareapi
-from oslo_vmware import exceptions as vmware_exceptions
+from oslo_service import loopingcall
+from oslo_vmware import vim_util, exceptions, api as vmwareapi
 
-import multiprocessing.queues as mpq
-
-from networking_dvs.common import config as dvs_config, constants as dvs_const
+from networking_dvs.common import config as dvs_config
 from networking_dvs.utils import dvs_util
 from itertools import chain
-import multiprocessing
 
 CONF = dvs_config.CONF
 
 LOG = log.getLogger(__name__)
+
+
+class RequestCanceledException(exceptions.VimException):
+    msg_fmt = _("The task was canceled by a user.")
+    code = 200
+
+exceptions.register_fault_class('RequestCanceled', RequestCanceledException)
 
 
 def _create_session(config):
@@ -230,38 +241,53 @@ class SpecBuilder(dvs_util.SpecBuilder):
         return virtual_machine_config_spec
 
 
-class VCenterMonitor(multiprocessing.Process):
-    def __init__(self, config, queue=None, quit_event=None, error_queue=None):
-        self._quit_event = quit_event or mpq.Event()
+class VCenterMonitor(object):
+    def __init__(self, config, queue=None, quit_event=None, error_queue=None, pool=None):
+        self._quit_event = quit_event or Event()
         self.changed = set()
-        self.queue = queue or mpq.Queue()
+        self.queue = queue or Queue()
         self.error_queue = error_queue
+        self._property_collector = None
         self.down_ports = {}
         self.untried_ports = {} # The host is simply down
         self.iteration = 0
+        self.connection = None
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
-        super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
+        # super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
+        pool = pool or eventlet
+        self.thread = pool.spawn(self._run, config)
 
-    def stop(self, *args):
-        self._quit_event.set()
+    def stop(self):
+        try:
+            self._quit_event.send(0)
+        except AssertionError: # In case someone already send an event
+            pass
+
+        # This will abort the WaitForUpdateEx early, so it will cancel leave the loop timely
+        if self.connection and self.property_collector:
+            try:
+                self.connection.invoke_api(self.connection.vim, 'CancelWaitForUpdates', self.property_collector)
+            except exceptions.VimException:
+                pass
 
     def _run(self, config):
         LOG.info(_LI("Monitor running... "))
-        connection = _create_session(config)
+        self.connection = _create_session(config)
         try:
+            connection = self.connection
             vim = connection.vim
             builder = SpecBuilder(vim.client.factory)
 
             version = None
-            wait_options = builder.wait_options(1, 20)
+            wait_options = builder.wait_options(60, 20)
 
-            property_collector = self._create_property_collector(connection)
-            self._create_property_filter(connection, property_collector)
+            self.property_collector = self._create_property_collector()
+            self._create_property_filter(self.property_collector)
 
-            while not self._quit_event.is_set():
-                result = connection.invoke_api(vim, 'WaitForUpdatesEx', property_collector,
+            while not self._quit_event.ready():
+                result = connection.invoke_api(vim, 'WaitForUpdatesEx', self.property_collector,
                                                version=version, options=wait_options)
                 self.iteration += 1
                 if result:
@@ -271,7 +297,6 @@ class VCenterMonitor(multiprocessing.Process):
                             if update.obj._type == 'VirtualMachine':
                                 self._handle_virtual_machine(update)
 
-
                 for port_desc in self.changed:
                     self._put(self.queue, port_desc)
                 self.changed.clear()
@@ -280,17 +305,17 @@ class VCenterMonitor(multiprocessing.Process):
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     if port_desc.status != 'untried' or 0 == self.iteration - iteration:
                         print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+        except RequestCanceledException, e:
+            # If the event is set, the request was canceled in self.stop()
+            if not self._quit_event.ready():
+                LOG.info("Waiting for updates was cancelled unexpectedly")
+                raise e # This will kill the whole process and we start again from scratch
         finally:
-            if self.queue:
-                self.queue.close()
-                self.queue.cancel_join_thread()
-            if self.error_queue:
-                self.error_queue.close()
-                self.error_queue.cancel_join_thread()
-            connection.logout
+            if self.connection:
+                self.connection.logout
 
-    @staticmethod
-    def _create_property_filter(connection, property_collector):
+    def _create_property_filter(self, property_collector):
+        connection = self.connection
         vim = connection.vim
         service_content = vim.service_content
         client_factory = vim.client.factory
@@ -313,10 +338,9 @@ class VCenterMonitor(multiprocessing.Process):
         return connection.invoke_api(vim, 'CreateFilter', property_collector, spec=property_filter_spec,
                                      partialUpdates=True)  # -> PropertyFilter
 
-    @staticmethod
-    def _create_property_collector(connection):
-        vim = connection.vim
-        _property_collector = connection.invoke_api(vim, 'CreatePropertyCollector',
+    def _create_property_collector(self):
+        vim = self.connection.vim
+        _property_collector = self.connection.invoke_api(vim, 'CreatePropertyCollector',
                                                     vim.service_content.propertyCollector)
 
         return _property_collector
@@ -327,7 +351,7 @@ class VCenterMonitor(multiprocessing.Process):
             if isinstance(port_desc, _DVSPortMonitorDesc):
                 mac_address = port_desc.mac_address
                 port_desc.status = 'deleted'
-                print("Removed {} {}".format(mac_address, port_desc.port_key))
+                LOG.debug("Removed {} {}".format(mac_address, port_desc.port_key))
                 self.down_ports.pop(mac_address, None)
                 self.untried_ports.pop(mac_address, None)
                 self.changed.add(port_desc)
@@ -427,10 +451,10 @@ class VCenterMonitor(multiprocessing.Process):
                     self._put(self.error_queue, port_desc)
 
     def _put(self, queue, port_desc):
-        while not self._quit_event.is_set():
+        while not self._quit_event.ready():
             try:
-                queue.put(port_desc, True, 0.1)
-            except mpq.Full:
+                queue.put_nowait(port_desc)
+            except Full:
                 continue
             break
 
@@ -442,19 +466,11 @@ class VCenter(object):
     # Subsequentally, the mac has to be identified with a port
     #
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, pool=None):
+        self.pool = pool
         self.config = config or CONF.ML2_VMWARE
         self.connection = None
-        self.quit_event = multiprocessing.Event()
-        self._monitor_process = VCenterMonitor(self.config, quit_event=self.quit_event)
-
-        self._monitor_process.start()
-
-        if hasattr(signal, 'SIGCHLD'):
-            signal.signal(signal.SIGCHLD, self._recover_processes)
-        else:
-            loopingcall.FixedIntervalLoopingCall(self._recover_processes)
-
+        self._monitor_process = VCenterMonitor(self.config, pool=self.pool)
         self.connection = _create_session(self.config)
 
         self.uuid_port_map = {}
@@ -464,17 +480,6 @@ class VCenter(object):
 
         for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, self.connection)):
             self.uuid_dvs_map[dvs.uuid] = dvs
-
-    def _recover_processes(self, *args):
-        print("Trying to recover processes")
-        if self.quit_event.is_set():
-            print("Qutting, nothing to be done")
-            return
-
-        if not self._monitor_process.is_alive():
-            LOG.warning(_LW("Monitor process died, restarting it"))
-            self._monitor_process = VCenterMonitor(self.config, quit_event=self.quit_event)
-            self._monitor_process.start()
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -549,6 +554,7 @@ class VCenter(object):
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
                 port_desc = self._monitor_process.queue.get(block=block, timeout=timeout)
+                block = False # Only block on the first item
                 if port_desc.status == 'deleted':
                     ports_by_mac.pop(port_desc.mac_address, None)
                     port = self.mac_port_map.pop(port_desc.mac_address, None)
@@ -565,7 +571,7 @@ class VCenter(object):
                             }, 'mac_address': port_desc.mac_address}
                     })
                     ports_by_mac[port_desc.mac_address] = port
-        except mpq.Empty:
+        except Empty:
             pass
 
         ports_by_switch_and_key = self.ports_by_switch_and_key(six.itervalues(ports_by_mac))
@@ -586,18 +592,14 @@ class VCenter(object):
 
         return ports_by_mac
 
-    def stop(self, *args):
-        self.quit_event.set()
+    def stop(self):
+        self._monitor_process.stop()
 
         try:
             while True:
                 self._monitor_process.queue.get_nowait()
-        except mpq.Empty:
+        except Empty:
             pass
-
-        self._monitor_process.join(1.0)
-        if self._monitor_process.is_alive():
-            self._monitor_process.terminate()
 
 
 # Small test routine
@@ -611,10 +613,23 @@ def main():
     # Start everything.
     LOG.info(_LI("Test running... "))
 
-    util = VCenter()
+    watch = timeutils.StopWatch()
+
+    def print_message():
+        try:
+            print("T={:1.3g}".format(watch.elapsed()))
+            watch.restart()
+        except RuntimeError:
+            watch.start()
+
+    pool = eventlet.greenpool.GreenPool(10)
+    loop = loopingcall.FixedIntervalLoopingCall(f=print_message)
+    loop.start(1.0)
+
+    util = VCenter(pool=pool)
 
     with timeutils.StopWatch() as w:
-        ports = util.get_new_ports(True, 1.0)
+        ports = util.get_new_ports(True, 10.0)
     print(ports)
     print(w.elapsed())
 
@@ -641,9 +656,11 @@ def main():
         if configs:
             dvs.update_ports(configs)
 
-    import time
-    time.sleep(300)
+    # import time
+    # time.sleep(300)
     util.stop()
+    loop.stop()
+    pool.waitall()
 
 
 if __name__ == "__main__":
