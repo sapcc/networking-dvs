@@ -386,4 +386,10 @@ def main():
 
 
 if __name__ == "__main__":
+    try:
+        resolution = float(os.getenv('DEBUG_BLOCKING'))
+        import eventlet.debug
+        eventlet.debug.hub_blocking_detection(state=True, resolution=resolution)
+    except (ValueError, TypeError):
+        pass
     main()

@@ -586,7 +586,7 @@ class VCenter(object):
                     state = getattr(port_info, "state", {})
                     runtime_info = getattr(state, "runtimeInfo", {})
                     if getattr(runtime_info, "linkUp", False):
-                        LOG.error("Port Link Down: {}".format(port_info.key))
+                        LOG.debug("Port Link Down: {}".format(port_info.key))
                 else:
                     ports_by_mac.pop(port_desc.mac_address)
 
@@ -664,4 +664,10 @@ def main():
 
 
 if __name__ == "__main__":
+    try:
+        resolution = float(os.getenv('DEBUG_BLOCKING'))
+        import eventlet.debug
+        eventlet.debug.hub_blocking_detection(state=True, resolution=resolution)
+    except (ValueError, TypeError):
+        pass
     main()
