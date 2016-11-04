@@ -45,6 +45,12 @@ LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
 
+def equality(a, b):
+    if a == b:
+        return '=='
+    else:
+        return '!='
+
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
 
@@ -207,39 +213,44 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         try:
             with timeutils.StopWatch() as w2:
                 ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
-                macs = set(six.iterkeys(ports_by_mac))
-                if macs:
-                    with timeutils.StopWatch() as w:
-                        neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
-                                                                                 agent_id=self.agent_id,
-                                                                                 host=self.conf.host)
-                    LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
-                else:
-                    neutron_ports = []
+                update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
+                missing = self._read_neutron_ports(ports_by_mac)
+                update_ports_thread.wait()
 
-                for neutron_info in neutron_ports:
-                    if neutron_info:
-                        # device <=> mac_address are the same, but mac_address is missing, when there is no data
-                        mac = neutron_info.get("mac_address", None)
-                        macs.discard(mac)
-                        port_info = ports_by_mac.get(mac, None)
-                        if port_info:
-                            port_id = neutron_info.get("port_id", None)
-                            if port_id:
-                                port_info["port"]["id"] = port_id
-                                dict_merge(port_info, neutron_info)
-                                self.api.uuid_port_map[port_id] = port_info
-                if macs:
-                    LOG.warning(_LW("Could not find the following macs: {}").format(macs))
-
-            LOG.debug(_LI("Scan {} ports completed in {:1.3g}s (Missing {})".format(len(neutron_ports),
+            LOG.debug(_LI("Scan {} ports completed in {:1.3g}s (Missing {})".format(len(ports_by_mac),
                                                                                     w2.elapsed(),
-                                                                                    len(macs))))
+                                                                                    missing)))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
             LOG.exception(_LE("Failed to get ports via RPC"))
             return []
+
+    def _read_neutron_ports(self, ports_by_mac):
+        macs = set(six.iterkeys(ports_by_mac))
+        if macs:
+            with timeutils.StopWatch() as w:
+                neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
+                                                                         agent_id=self.agent_id,
+                                                                         host=self.conf.host)
+            LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
+        else:
+            neutron_ports = []
+        for neutron_info in neutron_ports:
+            if neutron_info:
+                # device <=> mac_address are the same, but mac_address is missing, when there is no data
+                mac = neutron_info.get("mac_address", None)
+                macs.discard(mac)
+                port_info = ports_by_mac.get(mac, None)
+                if port_info:
+                    port_id = neutron_info.get("port_id", None)
+                    if port_id:
+                        port_info["port"]["id"] = port_id
+                        dict_merge(port_info, neutron_info)
+                        self.api.uuid_port_map[port_id] = port_info
+        if macs:
+            LOG.warning(_LW("Could not find the following macs: {}").format(macs))
+        return len(macs)
 
     def loop_count_and_wait(self, elapsed):
         # sleep till end of polling interval

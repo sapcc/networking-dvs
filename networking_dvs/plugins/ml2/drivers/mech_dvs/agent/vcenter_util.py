@@ -109,32 +109,24 @@ class _DVSPortDesc(object):
         # but a DistributedVirtualPort as returned by FetchDVPorts
         port_config = getattr(port, 'config', None)
         if port_config:
-            filter_config_key = None
-            vlan_id = None
+            values['config_version']=_cast(port_config.configVersion)
 
             setting = getattr(port_config, 'setting', None)
             if setting:
-                vlan_id = _cast(getattr(getattr(setting, 'vlan', None), 'vlanId', None), int)
+                values['vlan_id'] = _cast(getattr(getattr(setting, 'vlan', None), 'vlanId', None), int)
 
             filter_policy = getattr(setting, "filterPolicy", None)
             if filter_policy:
                 filter_config = getattr(filter_policy, "filterConfig", None)
                 if filter_config:
-                    filter_config_key = str(filter_config[0].key)
+                    values['filter_config_key'] = str(filter_config[0].key)
 
-            link_up = None
-            port_state = getattr(port, "state", None)
-            if port_state:
-                runtime_info = getattr(port_state, "runtimeInfo", {})
-                link_up = getattr(runtime_info, "linkUp", None)
-
-            values.update(config_version=_cast(port_config.configVersion),
-                          # name=_cast(port_config.name),
-                          # description=_cast(port_config.description),
-                          vlan_id=vlan_id,
-                          filter_config_key=filter_config_key,
-                          link_up=link_up
-                          )
+        port_state = getattr(port, 'state', None)
+        if port_state:
+            try:
+                values['link_up'] = port_state.runtimeInfo.linkUp
+            except AttributeError, e:
+                LOG.error(e)
 
         return values
 
@@ -492,8 +484,7 @@ class VCenter(object):
                                                               port_desc.connection_cookie, connection_cookie))
             return False
 
-        port.update(_DVSPortDesc.from_dvs_port(port_info))
-
+        port_desc.update(_DVSPortDesc.from_dvs_port(port_info))
         return True
 
     def ports_by_switch_and_key(self, ports):
@@ -574,23 +565,18 @@ class VCenter(object):
         except Empty:
             pass
 
-        ports_by_switch_and_key = self.ports_by_switch_and_key(six.itervalues(ports_by_mac))
+        return ports_by_mac
 
+    def read_dvs_ports(self, ports_by_mac):
+        ports_by_switch_and_key = self.ports_by_switch_and_key(six.itervalues(ports_by_mac))
         # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
         # partly connected, meaning: the instance is associated, but the link is not quite up yet
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):  # View is not sufficient
                 port = ports_by_key[port_info.key]
-                port_desc = port['port_desc']
-                if VCenter.update_port_desc(port, port_info):
-                    state = getattr(port_info, "state", {})
-                    runtime_info = getattr(state, "runtimeInfo", {})
-                    if getattr(runtime_info, "linkUp", False):
-                        LOG.debug("Port Link Down: {}".format(port_info.key))
-                else:
+                if not VCenter.update_port_desc(port, port_info):
+                    port_desc = port['port_desc']
                     ports_by_mac.pop(port_desc.mac_address)
-
-        return ports_by_mac
 
     def stop(self):
         self._monitor_process.stop()
@@ -630,6 +616,8 @@ def main():
 
     with timeutils.StopWatch() as w:
         ports = util.get_new_ports(True, 10.0)
+        util.read_dvs_ports(ports)
+
     print(ports)
     print(w.elapsed())
 
@@ -647,7 +635,7 @@ def main():
         configs = []
         for port in ports:
             cookie = getattr(port, 'connectionCookie', None)
-            port_config =  getattr(port, 'config', {})
+            port_config = getattr(port, 'config', {})
             name = getattr(port_config, 'name', None)
             description = getattr(port_config, 'description', None)
             if not cookie and (name or description):
