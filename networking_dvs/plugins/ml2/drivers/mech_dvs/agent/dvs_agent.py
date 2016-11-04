@@ -45,12 +45,6 @@ LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
 
-def equality(a, b):
-    if a == b:
-        return '=='
-    else:
-        return '!='
-
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
 
@@ -216,6 +210,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
                 missing = self._read_neutron_ports(ports_by_mac)
                 update_ports_thread.wait()
+                for mac in missing:
+                    del ports_by_mac[mac]
 
             LOG.debug(_LI("Scan {} ports completed in {:1.3g}s (Missing {})".format(len(ports_by_mac),
                                                                                     w2.elapsed(),
@@ -250,7 +246,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                         self.api.uuid_port_map[port_id] = port_info
         if macs:
             LOG.warning(_LW("Could not find the following macs: {}").format(macs))
-        return len(macs)
+        return macs
 
     def loop_count_and_wait(self, elapsed):
         # sleep till end of polling interval
