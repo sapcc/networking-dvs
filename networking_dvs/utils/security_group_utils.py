@@ -260,7 +260,7 @@ def update_port_rules(dvs, ports):
     builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
     hashed_rules = {}
     port_config_list = build_port_rules(builder, ports, hashed_rules)
-    dvs.update_ports_checked(ports, port_config_list)
+    dvs.queue_update_specs(port_config_list)
 
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):

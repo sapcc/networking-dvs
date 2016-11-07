@@ -470,7 +470,7 @@ class VCenter(object):
 
         self.uuid_dvs_map = {}
 
-        for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, self.connection)):
+        for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.uuid_dvs_map[dvs.uuid] = dvs
 
     @staticmethod
@@ -499,10 +499,7 @@ class VCenter(object):
         return ports_by_switch_and_key
 
     @dvs_util.wrap_retry
-    def bind_ports(self, ports):
-        ports_up = []
-        ports_down = []
-
+    def bind_ports(self, ports, callback=None):
         ports_by_switch_and_key = self.ports_by_switch_and_key(ports)
 
         builder = SpecBuilder(self.connection.vim.client.factory)
@@ -510,28 +507,11 @@ class VCenter(object):
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             specs = []
             for port in six.itervalues(ports_by_key):
-                if port["network_type"] == "vlan":
-                    spec = builder.neutron_to_port_config_spec(port)
-                    specs.append(spec)
-                else:
-                    ports_down.append(port)
-                    LOG.warning(_LW("Cannot configure port %s it is not of type vlan"), port["port_id"])
+                assert(port["network_type"] == "vlan" and not port["segmentation_id"] is None)
+                spec = builder.neutron_to_port_config_spec(port)
+                specs.append(spec)
 
-            dvs.update_ports_checked(ports, specs)
-
-            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
-                port_key = str(port_info.key)
-                port = ports_by_key[port_key]
-                port_desc = port['port_desc']
-                if VCenter.update_port_desc(port, port_info):
-                    if port["admin_state_up"]:
-                        if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
-                            ports_up.append(port)
-                    else:  # Port down requested
-                        if not port_desc.link_up:
-                            ports_down.append(port)
-
-        return ports_up, ports_down
+            dvs.queue_update_specs(specs, callback=callback)
 
     def get_dvs_by_uuid(self, uuid):
         return self.uuid_dvs_map.get(uuid,None)
@@ -550,7 +530,10 @@ class VCenter(object):
                     ports_by_mac.pop(port_desc.mac_address, None)
                     port = self.mac_port_map.pop(port_desc.mac_address, None)
                     if port:
+                        port_desc = port['port_desc']
                         self.uuid_port_map.pop(port['id'], None)
+                        dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
+                        dvs.ports_by_key.pop(port_desc.port_key, None)
                 else:
                     port = self.mac_port_map.get(port_desc.mac_address, {})
                     port.update({
@@ -562,6 +545,9 @@ class VCenter(object):
                             }, 'mac_address': port_desc.mac_address}
                     })
                     ports_by_mac[port_desc.mac_address] = port
+                    dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
+                    if dvs:
+                        dvs.ports_by_key[port_desc.port_key] = port
         except Empty:
             pass
 

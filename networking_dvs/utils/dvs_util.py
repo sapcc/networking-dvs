@@ -20,6 +20,7 @@ import six
 
 from neutron.i18n import _LI, _LW
 from oslo_log import log
+from oslo_utils import timeutils
 from oslo_vmware import api
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
@@ -33,9 +34,12 @@ LOG = log.getLogger(__name__)
 class DVSController(object):
     """Controls one DVS."""
 
-    def __init__(self, dvs_name, connection):
+    def __init__(self, dvs_name, connection=None, pool=None):
         self.connection = connection
         self._uuid = None
+        self.pool = pool
+        self._update_spec_queue = []
+        self.ports_by_key = {}
         try:
             self.dvs_name = dvs_name
             self._dvs, self._datacenter = self._get_dvs(dvs_name, connection)
@@ -148,34 +152,82 @@ class DVSController(object):
             self._dvs, port=update_specs)
 
     def update_ports(self, update_specs):
+        if not update_specs:
+            return
         LOG.debug("Update Ports: {} {}".format(update_specs[0].setting.filterPolicy.inherited, sorted([spec.key for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
-        return self.connection.wait_for_task(update_task)  # -> May raise DvsOperationBulkFault, when host is down
+        try:
+            return self.connection.wait_for_task(update_task)  # -> May raise DvsOperationBulkFault, when host is down
+        except vmware_exceptions.ManagedObjectNotFoundException:
+            return
 
-    def update_ports_checked(self, ports, update_specs, retries=5):
-        update_specs = sorted(update_specs, key=lambda x: x.key)
-        ports_by_key = {}
-        for port in ports:
-            port_desc = port.get('port_desc', None)
-            if port_desc:
-                ports_by_key[port_desc.port_key] = port
+    def queue_update_specs(self, update_specs, callback=None):
+        self._update_spec_queue.append((update_specs, [callback]))
 
+    @staticmethod
+    def _chunked_update_specs(specs, limit=500):
+        specs = list(specs)
+        countdown = limit
+        first = 0
+        for i, spec in enumerate(specs):
+            try:
+                for filter_config in spec.setting.filterPolicy.filterConfig:
+                    countdown -= len(filter_config.parameters)
+                    try:
+                        countdown -= len(filter_config.trafficRuleset)
+                    except AttributeError:
+                        pass
+            except AttributeError:
+                pass
+            if countdown <= 0:
+                last = i + 1
+                yield(specs[first:last])
+                countdown = limit
+                first = last
+        yield(specs[first:])
+
+    def apply_queued_update_specs(self):
+        with timeutils.StopWatch() as w:
+            callbacks, update_specs_by_key = self._get_queued_update_changes()
+
+            if not update_specs_by_key:
+                return
+
+            results = []
+            for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in self._chunked_update_specs(six.itervalues(update_specs_by_key))]):
+                if result:
+                    results.extend(result)
+
+        LOG.debug("apply_queued_update_specs took {:1.3g}s".format(w.elapsed()))
+        return results
+
+    def _apply_queued_update_specs(self, update_specs, callbacks, retries=5):
+        if not update_specs:
+            return
+
+        failed_keys = []
         for i in range(retries):
             try:
                 value = self.update_ports(update_specs)
 
                 for spec in update_specs:
-                    port = ports_by_key[spec.key]
+                    port = self.ports_by_key[spec.key]
                     port_desc = port.get('port_desc', None)
                     if port_desc and port_desc.config_version:
                         port_desc.config_version = str(int(port_desc.config_version) + 1)
+
+                if callbacks:
+                    succeeded_keys = [str(spec.key) for spec in update_specs]
+                for callback in callbacks:
+                    if callable(callback):
+                        callback(self, succeeded_keys, failed_keys)
 
                 return value
             except vmware_exceptions.VimException as e:
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
                     for port_info in self.get_port_info_by_portkey([spec.key for spec in update_specs]):
                         port_key = str(port_info.key)
-                        port = ports_by_key[port_key]
+                        port = self.ports_by_key[port_key]
                         port_desc = port['port_desc']
                         update_spec_index = None
                         update_spec = None
@@ -187,11 +239,16 @@ class DVSController(object):
                                 break
 
                         connection_cookie = getattr(port_info, "connectionCookie", None)
+
+                        if connection_cookie:
+                            connection_cookie = str(connection_cookie)
+
                         if connection_cookie != port_desc.connection_cookie:
                             LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
                                                                               port_desc.connection_cookie,
                                                                               connection_cookie))
                             if update_spec_index:
+                                failed_keys.append(port_key)
                                 del update_specs[update_spec_index]
                         else:
                             config_version = str(port_info.config.configVersion)
@@ -206,10 +263,34 @@ class DVSController(object):
                                 update_spec.configVersion = config_version
                     continue
 
-                if isinstance(e, vmware_exceptions.ManagedObjectNotFoundException):
-                    return
+                raise exceptions.wrap_wmvare_vim_exception(e)
+
+    def _get_queued_update_changes(self):
+        callbacks = []
+        # First merge the changes for the same port(key)
+        # Later changes overwrite earlier ones, non-inherited values take precedence
+        # This cannot be called out-of-order
+        update_specs_by_key = {}
+        update_spec_queue = self._update_spec_queue
+        self._update_spec_queue = []
+        for _update_specs, _callbacks in update_spec_queue:
+            if _callbacks:
+                callbacks.extend(_callbacks)
+
+            for spec in _update_specs:
+                existing_spec = update_specs_by_key.get(spec.key, None)
+                if not existing_spec:
+                    update_specs_by_key[spec.key] = spec
                 else:
-                    raise exceptions.wrap_wmvare_vim_exception(e)
+                    for attr in ['configVersion', 'description', 'name']:
+                        value = getattr(spec, attr, None)
+                        if not value is None and value != getattr(existing_spec, attr, None):
+                            setattr(existing_spec, attr, value)
+                    for attr in ['blocked', 'filterPolicy', 'vlan']:
+                        value = getattr(spec.setting, attr)
+                        if not value.inherited is None:
+                            setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
+        return callbacks, update_specs_by_key
 
     def switch_port_blocked_state(self, port):
         try:
@@ -591,7 +672,7 @@ class SpecBuilder(object):
         return spec
 
 
-def create_network_map_from_config(config, connection=None):
+def create_network_map_from_config(config, connection=None, pool=None):
     """Creates physical network to dvs map from config"""
     kwargs = {}
     if config.wsdl_location:
@@ -611,7 +692,7 @@ def create_network_map_from_config(config, connection=None):
     network_map = {}
     for pair in config.network_maps:
         network, dvs = pair.split(':')
-        network_map[network] = DVSController(dvs, connection)
+        network_map[network] = DVSController(dvs, connection=connection, pool=pool)
     return network_map
 
 

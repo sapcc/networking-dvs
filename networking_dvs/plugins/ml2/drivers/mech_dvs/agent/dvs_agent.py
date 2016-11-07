@@ -259,6 +259,36 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                        'elapsed': elapsed})
         self.iter_num += 1
 
+    def _bound_ports(self, dvs, succeeded_keys, failed_keys):
+        LOG.info(_LI("_bound_ports({}, {})").format(succeeded_keys, failed_keys))
+        all_keys = succeeded_keys+failed_keys
+        port_up_ids = []
+        port_down_ids = []
+        with timeutils.StopWatch() as w:
+            for port_info in dvs.get_port_info_by_portkey(all_keys):
+                port_key = str(port_info.key)
+                if port_key == '0':
+                    print(port_info)
+
+                port = dvs.ports_by_key[port_key]
+                port_desc = port['port_desc']
+                if vcenter_util.VCenter.update_port_desc(port, port_info):
+                    port_id = port["port_id"]
+                    if port["admin_state_up"]:
+                        if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
+                            port_up_ids.append(port_id)
+                            self.unbound_ports.pop(port_id, None)
+                        else:
+                            self.unbound_ports[port_id] = port
+                    else:  # Port down requested
+                        if not port_desc.link_up:
+                            port_down_ids.append(port_id)
+
+        if port_up_ids or port_down_ids:
+            self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
+
+        LOG.info(_LI("_bound_ports took {:1.3g}s").format(w.elapsed()))
+
     def process_ports(self):
         # LOG.info("******* Processing Ports *******")
         deleted_ports = self.deleted_ports.copy()
@@ -275,28 +305,17 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
 
-        port_up_ids = []
-        port_down_ids = []
         ports_to_bind = []
 
         for port in found_ports:
-            port_desc = port['port_desc']
-            # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
-            # or vms not managed by openstack
-            port_id = port.get('port_id', None)
-            segmentation_id = port.get('segmentation_id', None)
-            if not port_id or not segmentation_id:
-                LOG.warning(_LW("Missing attribute in port {}").format(port))
-            elif port_desc.vlan_id == segmentation_id and \
-                            port_desc.link_up == port.get("admin_state_up", True):
-                # The port is already in the expected state
-                # Since we do not know if neutron knows about it, we still send an update
-                if port_desc.link_up:
-                    port_up_ids.append(port_id)
-                else:
-                    port_down_ids.append(port_id)
-            else:
+            if port.get('port_id', None) \
+                    and port.get('segmentation_id', None) \
+                    and port.get('network_type', None) == 'vlan':
                 ports_to_bind.append(port)
+            else:
+                # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
+                # or vms not managed by openstack
+                LOG.warning(_LW("Missing attribute in port {}").format(port))
 
         if self.unbound_ports:
             unbound_ports = self.unbound_ports.copy()
@@ -310,22 +329,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
             with timeutils.StopWatch() as w:
-                ports_up, ports_down = self.api.bind_ports(ports_to_bind)
-                for port in ports_down:
-                    port_id = port["port_id"]
-                    port_down_ids.append(port_id)
-                    # Updating the port will trigger a security group update conflicting with a subsequent configuration
-                    # updated_ports[port_id] = port
-                    self.unbound_ports[port_id] = port
-                for port in ports_up:
-                    port_id = port["port_id"]
-                    port_up_ids.append(port_id)
-                    updated_ports[port_id] = port
-                    self.unbound_ports.pop(port_id, None)
+                self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
             LOG.info(_LI("bind_ports took {:1.3g}s").format(w.elapsed()))
-
-        if port_up_ids or port_down_ids:
-            self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -345,11 +350,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             updated_ports = six.viewkeys(updated_ports) - added_ports
             self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
-        return {
-            'added': len(added_ports),
-            'updated': len(updated_ports),
-            'removed': len(deleted_ports)
-        }
+        # Apply the changes
+        for dvs in six.itervalues(self.api.uuid_dvs_map):
+            dvs.apply_queued_update_specs()
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with timeutils.StopWatch() as w:
