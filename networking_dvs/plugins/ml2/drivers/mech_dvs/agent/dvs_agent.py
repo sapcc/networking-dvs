@@ -367,8 +367,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 self.process_ports()
             self.loop_count_and_wait(w.elapsed())
 
-        self.pool.waitall()
-
     def daemon_loop(self):
         # Start everything.
         signal.signal(signal.SIGTERM, self._handle_sigterm)
@@ -377,22 +375,22 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             signal.signal(signal.SIGHUP, self._handle_sighup)
 
         self.rpc_loop()
+        if self.api:
+            self.api.stop()
+        if self.pool:
+            self.pool.waitall()
 
 
 def main():
-    try:
-        import sys
-        common_config.init(sys.argv[1:])
-        common_config.setup_logging()
+    import sys
+    common_config.init(sys.argv[1:])
+    common_config.setup_logging()
 
-        agent = DvsNeutronAgent()
+    agent = DvsNeutronAgent()
 
-        # Start everything.
-        LOG.info(_LI("Agent initialized successfully, now running... "))
-        agent.daemon_loop()
-    finally:
-        LOG.info(_LI("Stopping"))
-        agent.api.stop()
+    # Start everything.
+    LOG.info(_LI("Agent initialized successfully, now running... "))
+    agent.daemon_loop()
 
 
 if __name__ == "__main__":
