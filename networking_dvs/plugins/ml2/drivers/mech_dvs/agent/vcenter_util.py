@@ -507,9 +507,9 @@ class VCenter(object):
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             specs = []
             for port in six.itervalues(ports_by_key):
-                assert(port["network_type"] == "vlan" and not port["segmentation_id"] is None)
-                spec = builder.neutron_to_port_config_spec(port)
-                specs.append(spec)
+                if port["network_type"] == "vlan" and not port["segmentation_id"] is None:
+                    spec = builder.neutron_to_port_config_spec(port)
+                    specs.append(spec)
 
             dvs.queue_update_specs(specs, callback=callback)
 

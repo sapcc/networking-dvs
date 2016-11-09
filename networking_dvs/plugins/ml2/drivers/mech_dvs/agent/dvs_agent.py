@@ -73,6 +73,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         self.setup_rpc()
 
         report_interval = self.conf.AGENT.report_interval or 30
+
         if report_interval:
             heartbeat = loopingcall.FixedIntervalLoopingCall(self._report_state)
             heartbeat.start(interval=report_interval)
@@ -302,10 +303,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             if self.sg_agent:
                 self.pool.spawn(self.sg_agent.remove_devices_filter, deleted_ports)
 
+        # If the segmentation id, or the port status changed, it will land in the updated_ports
+        updated_ports = self.updated_ports.copy()
+
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
 
-        ports_to_bind = []
+        ports_to_bind = list(six.iterkeys(updated_ports))
 
         for port in found_ports:
             if port.get('port_id', None) \
@@ -319,12 +323,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         if self.unbound_ports:
             unbound_ports = self.unbound_ports.copy()
-            LOG.debug("Still down: {}".format(six.viewkeys(unbound_ports)))
+            LOG.debug("Still down: {}".format(list(six.iterkeys(unbound_ports))))
             ports_to_bind.extend(six.itervalues(unbound_ports))
             for port_id in six.iterkeys(unbound_ports):
                 self.unbound_ports.pop(port_id, None)
-
-        updated_ports = self.updated_ports.copy()
 
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
