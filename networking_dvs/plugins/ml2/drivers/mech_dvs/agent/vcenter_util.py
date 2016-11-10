@@ -17,6 +17,9 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
     import eventlet
     eventlet.monkey_patch()
 
+from networking_dvs.patches import suds_patch
+suds_patch.apply()
+
 from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
 

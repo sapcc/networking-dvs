@@ -29,21 +29,9 @@ from networking_dvs.utils import dvs_util
 LOG = log.getLogger(__name__)
 
 #### Monkey-patch
-import suds.version
+from networking_dvs import suds_patch
+suds_patch.apply()
 
-if suds.version.__version__ < '0.7':
-    import suds.mx.appender
-
-    def _suds_mx_object_appender_append_workaround(self, parent, content):
-        object = content.value
-        child = self.node(content)
-        parent.append(child)
-        for item in object:
-            cont = suds.mx.Content(tag=item[0], value=item[1])
-            suds.mx.appender.Appender.append(self, child, cont)
-
-
-    suds.mx.appender.ObjectAppender.append = _suds_mx_object_appender_append_workaround
 
 HASHED_RULE_INFO_KEYS = [
     'source_ip_prefix',

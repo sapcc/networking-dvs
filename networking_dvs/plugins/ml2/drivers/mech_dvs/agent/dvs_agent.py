@@ -20,6 +20,9 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 
     eventlet.monkey_patch()
 
+from networking_dvs.patches import suds_patch
+suds_patch.apply()
+
 import collections
 import signal
 import six
@@ -381,7 +384,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self.pool.waitall()
 
 
-def main():
+def _main():
     import sys
     common_config.init(sys.argv[1:])
     common_config.setup_logging()
@@ -393,11 +396,31 @@ def main():
     agent.daemon_loop()
 
 
-if __name__ == "__main__":
+def main():
     try:
         resolution = float(os.getenv('DEBUG_BLOCKING'))
         import eventlet.debug
         eventlet.debug.hub_blocking_detection(state=True, resolution=resolution)
     except (ValueError, TypeError):
         pass
-    main()
+
+    try:
+        import yappi as profiler
+
+        profiler.set_clock_type('wall')
+        profiler.start(builtins=True)
+    except ImportError:
+        profiler = None
+        pass
+
+    try:
+        _main()
+    except KeyboardInterrupt:
+        pass
+
+    if profiler:
+        print("Stopping profiler")
+        profiler.stop()
+        stats = profiler.get_func_stats()
+        stats.save('/tmp/profile.callgrind', type='callgrind')
+        print("Done")
