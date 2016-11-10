@@ -29,7 +29,7 @@ from networking_dvs.utils import dvs_util
 LOG = log.getLogger(__name__)
 
 #### Monkey-patch
-from networking_dvs import suds_patch
+from networking_dvs.patches import suds_patch
 suds_patch.apply()
 
 
