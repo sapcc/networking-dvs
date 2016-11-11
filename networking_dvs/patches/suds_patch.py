@@ -13,23 +13,80 @@ if suds.version.__version__ < '0.7':
 
     suds.mx.appender.ObjectAppender.append = _suds_mx_object_appender_append_workaround
 
-    import suds.sax.parser, eventlet
+    import eventlet
 
-    _original_sax_parser_endElement = suds.sax.parser.Handler.endElement
+    def yield_function(function):
+        def wrapped(*args, **kwargs):
+            eventlet.sleep(0)
+            value = function(*args, **kwargs)
+            eventlet.sleep(0)
 
-    def _sax_parser_endElement(self, name):
-        _original_sax_parser_endElement(self, name)
-        eventlet.sleep(0)
+            return value
 
-    suds.sax.parser.Handler.endElement = _sax_parser_endElement
+        setattr(function.im_class, function.__name__, wrapped)
 
-    # _original_sax_parser_characters = suds.sax.parser.Handler.characters
+    import suds.sax.parser
 
-    #def _sax_parser_characters(self, characters):
-    #    value = _original_sax_parser_endElement(self, content)
-    #    eventlet.sleep(0)
+    yield_function(suds.sax.parser.Handler.endElement)
 
-    # suds.sax.parser.Handler.characters = _sax_parser_characters
+    import suds.wsdl
+
+    def _wdsl_definitions_open_import(self):
+        for imp in self.imports:
+            eventlet.sleep(0)
+            imp.load(self)
+
+    suds.wsdl.Definitions.open_imports = _wdsl_definitions_open_import
+
+    yield_function(suds.wsdl.Definitions.set_wrapped)
+
+    import suds.reader
+
+    yield_function(suds.reader.DocumentReader.open)
+
+    import suds.xsd.schema
+
+    yield_function(suds.xsd.schema.Schema.build)
+    yield_function(suds.xsd.schema.Schema.merge)
+    yield_function(suds.xsd.schema.Schema.instance)
+    yield_function(suds.xsd.schema.Schema.dereference)
+
+    import suds.umx.core
+
+    yield_function(suds.umx.core.Core.append)
+
+    import suds.xsd.sxbase
+
+    yield_function(suds.xsd.sxbase.Iter.__init__)
+
+    import suds.xsd.deplist
+
+    # Looks crappy, might need actually to be patched, or upgraded to 0.7 where they fixed it
+    def _suds_xsd_deplist_sort(self):
+        self.sorted = list()
+        self.pushed = set()
+        for item in self.unsorted:
+            popped = []
+            eventlet.sleep(0)
+            self.push(item)
+            while len(self.stack):
+                try:
+                    top = self.top()
+                    ref = top[1].next()
+                    refd = self.index.get(ref)
+                    if refd is None:
+                        continue
+                    self.push(refd)
+                except StopIteration:
+                    popped.append(self.pop())
+                    continue
+            for p in popped:
+                self.sorted.append(p)
+        self.unsorted = self.sorted
+        return self.sorted
+
+    suds.xsd.deplist.DepList.sort = _suds_xsd_deplist_sort
+
 
 def apply():
     pass

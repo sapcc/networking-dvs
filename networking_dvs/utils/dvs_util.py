@@ -262,7 +262,8 @@ class DVSController(object):
 
                                 update_spec.configVersion = config_version
                     continue
-
+                import traceback
+                traceback.print_exc
                 raise exceptions.wrap_wmvare_vim_exception(e)
 
     def _get_queued_update_changes(self):
