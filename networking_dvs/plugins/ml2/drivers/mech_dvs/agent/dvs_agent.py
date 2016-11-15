@@ -263,28 +263,18 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     def _bound_ports(self, dvs, succeeded_keys, failed_keys):
         LOG.info(_LI("_bound_ports({}, {})").format(succeeded_keys, failed_keys))
-        all_keys = succeeded_keys+failed_keys
         port_up_ids = []
         port_down_ids = []
-        with timeutils.StopWatch() as w:
-            for port_info in dvs.get_port_info_by_portkey(all_keys):
-                port_key = str(port_info.key)
-                if port_key == '0':
-                    print(port_info)
 
+        with timeutils.StopWatch() as w:
+            for port_key in succeeded_keys:
                 port = dvs.ports_by_key[port_key]
-                port_desc = port['port_desc']
-                if vcenter_util.VCenter.update_port_desc(port, port_info):
-                    port_id = port["port_id"]
-                    if port["admin_state_up"]:
-                        if port_desc.vlan_id == port["segmentation_id"] and port_desc.link_up:
-                            port_up_ids.append(port_id)
-                            self.unbound_ports.pop(port_id, None)
-                        else:
-                            self.unbound_ports[port_id] = port
-                    else:  # Port down requested
-                        if not port_desc.link_up:
-                            port_down_ids.append(port_id)
+                port_id = port["port_id"]
+                self.unbound_ports.pop(port_id, None)
+                if port["admin_state_up"]:
+                    port_up_ids.append(port_id)
+                else:
+                    port_down_ids.append(port_id)
 
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
