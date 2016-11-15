@@ -36,6 +36,7 @@ from oslo_vmware import vim_util, exceptions, api as vmwareapi
 
 from networking_dvs.common import config as dvs_config
 from networking_dvs.utils import dvs_util
+from networking_dvs.utils import spec_builder
 from itertools import chain
 
 CONF = dvs_config.CONF
@@ -166,13 +167,13 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
         self.device_key = int(device_key)
 
 
-class SpecBuilder(dvs_util.SpecBuilder):
+class SpecBuilder(spec_builder.SpecBuilder):
     def neutron_to_port_config_spec(self, port):
         port_desc = port['port_desc']
-        setting = self.port_setting(vlan=self.vlan(port["segmentation_id"]),
-                                    blocked=self.blocked(not port["admin_state_up"]),
-                                    filter_policy=self.filter_policy(None)
-                                    )
+        setting = self.port_setting()
+        setting.vlan=self.vlan(port["segmentation_id"])
+        setting.blocked=self.blocked(not port["admin_state_up"])
+        setting.filterPolicy=self.filter_policy(None)
 
         return self.port_config_spec(version=port_desc.config_version,
                                      key=port_desc.port_key,

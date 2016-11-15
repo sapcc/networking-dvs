@@ -18,13 +18,12 @@ import copy
 import six
 
 from oslo_log import log
-from oslo_vmware import exceptions as vmware_exceptions
 
 from neutron.i18n import _LI
 
 from networking_dvs.common import constants as dvs_const, exceptions
 from networking_dvs.utils import dvs_util
-
+from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
 
@@ -46,7 +45,7 @@ HASHED_RULE_INFO_KEYS = [
 ]
 
 
-class PortConfigSpecBuilder(dvs_util.SpecBuilder):
+class PortConfigSpecBuilder(spec_builder.SpecBuilder):
     def __init__(self, spec_factory):
         super(PortConfigSpecBuilder, self).__init__(spec_factory)
         self.rule_obj = self.factory.create('ns0:DvsTrafficRule')
@@ -270,12 +269,7 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, 
         else:
             rule = _create_rule(builder, rule_info, name='regular')
             built_rule = rule.build(seq)
-            cidr_revert = True
-            if (rule.ethertype == 'IPv4' and rule.protocol == 'udp' and
-                rule.direction == 'incomingPackets' and
-                rule.backward_port_range == (67, 67) and
-                rule.port_range == (68, 68)):
-                    cidr_revert = False
+            cidr_revert = not _rule_excepted(rule)
             reverse_rule = rule.reverse(cidr_revert)
             built_reverse_rule = reverse_rule.build(reverse_seq)
             hashed_rules[rule_hash] = (built_rule, built_reverse_rule)
@@ -291,9 +285,23 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, 
         seq += 10
 
     filter_policy = builder.filter_policy(rules, filter_config_key=filter_config_key)
-    setting = builder.port_setting(filter_policy=filter_policy)
-    spec = builder.port_config_spec(port_key, setting=setting, version=version)
+    setting = builder.port_setting()
+    setting.filterPolicy = filter_policy
+    spec = builder.port_config_spec(setting=setting)
+    spec.key = port_key
+    spec.version = version
     return spec
+
+
+def _rule_excepted(rule):
+    if rule.direction == 'incomingPackets' and rule.protocol == 'udp':
+        if (rule.ethertype == 'IPv4' and rule.port_range == (68, 68) and
+            rule.backward_port_range == (67, 67)):
+                return True
+        if (rule.ethertype == 'IPv6' and rule.port_range == (546, 546) and
+            rule.backward_port_range == (547, 547)):
+                return True
+    return False
 
 
 def _get_rule_hash(rule):
