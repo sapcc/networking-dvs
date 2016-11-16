@@ -24,7 +24,9 @@ from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
 
 import atexit
+import attr
 import six
+
 from collections import defaultdict
 from datetime import datetime
 
@@ -37,10 +39,8 @@ from oslo_vmware import vim_util, exceptions, api as vmwareapi
 from networking_dvs.common import config as dvs_config
 from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
-from itertools import chain
 
 CONF = dvs_config.CONF
-
 LOG = log.getLogger(__name__)
 
 
@@ -75,24 +75,19 @@ def _cast(value, _type=str):
     return _type(value)
 
 
+@attr.s(slots=True)
 class _DVSPortDesc(object):
-    __slots__ = ('dvs_uuid', 'port_key', 'port_group_key', 'mac_address', 'connection_cookie', 'connected', 'status',
-                 'config_version', 'vlan_id', 'link_up', 'filter_config_key',)
-
-    def __init__(self, dvs_uuid=None, port_key=None, port_group_key=None,
-                 mac_address=None, connection_cookie=None, connected=None, status=None,
-                 config_version=None, vlan_id=None, link_up=None, filter_config_key=None):
-        self.dvs_uuid = _cast(dvs_uuid)
-        self.port_key = _cast(port_key)  # It is an int, but the WDSL defines it as a string
-        self.port_group_key = _cast(port_group_key)
-        self.mac_address = _cast(mac_address)
-        self.connection_cookie = _cast(connection_cookie)  # Same as with port_key, int which is represented as an int
-        self.connected = connected
-        self.status = _cast(status)
-        self.config_version = _cast(config_version)
-        self.vlan_id = vlan_id
-        self.link_up = link_up
-        self.filter_config_key = _cast(filter_config_key)
+    dvs_uuid = attr.ib(convert=str)
+    port_key = attr.ib(convert=str)
+    port_group_key = attr.ib(convert=str) # It is an int, but the WDSL defines it as a string
+    mac_address = attr.ib(convert=str)
+    connection_cookie = attr.ib(convert=str) # Same as with port_key, int which is represented as a string
+    connected = attr.ib(default=False)
+    status = attr.ib(convert=str, default='')
+    config_version = attr.ib(convert=str, default='') # Same as with port_key, int which is represented as a string
+    vlan_id = attr.ib(default=None)
+    link_up = attr.ib(default=None)
+    filter_config_key = attr.ib(convert=str, default='')
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
@@ -105,7 +100,7 @@ class _DVSPortDesc(object):
             dvs_uuid=_cast(getattr(port, 'switchUuid', None) or getattr(port, 'dvsUuid', None)),
             # switchUuid in connection, dvsUuid in port
             # portKey in connection, key in port
-            port_key=getattr(port, 'portKey', None) or getattr(port, 'key', None),
+            port_key=_cast(getattr(port, 'portKey', None) or getattr(port, 'key', None)),
             port_group_key=_cast(port.portgroupKey),
             connection_cookie=_cast(getattr(port, "connectionCookie", None)),
         )
@@ -135,36 +130,10 @@ class _DVSPortDesc(object):
         return values
 
 
-    @classmethod
-    def _slots(cls):
-        return chain.from_iterable(getattr(cls2, '__slots__', tuple()) for cls2 in cls.__mro__)
-
-    def update(self, source):
-        if not source:
-            return
-
-        if isinstance(source, dict):
-            for slot in self._slots():
-                attr = source.get(slot, None)
-                if not attr is None:
-                    setattr(self, slot, source.get(slot))
-        else:
-            for slot in self._slots():
-                attr = getattr(source, slot, None)
-                if not attr is None:
-                    setattr(self, slot, attr)
-
-    def __repr__(self):
-        return "%s(%r)" % (self.__class__, {s: getattr(self, s, None) for s in self._slots()})
-
-
+@attr.s(slots=True)
 class _DVSPortMonitorDesc(_DVSPortDesc):
-    __slots__ = ('vmobref', 'device_key',)
-
-    def __init__(self, vmobref=None, device_key=None, **kwargs):
-        super(_DVSPortMonitorDesc, self).__init__(**kwargs)
-        self.vmobref = str(vmobref)
-        self.device_key = int(device_key)
+    vmobref = attr.ib(convert=str, default=None)
+    device_key = attr.ib(convert=int, default=None)
 
 
 class SpecBuilder(spec_builder.SpecBuilder):
@@ -488,7 +457,9 @@ class VCenter(object):
                                                               port_desc.connection_cookie, connection_cookie))
             return False
 
-        port_desc.update(_DVSPortDesc.from_dvs_port(port_info))
+        for k, v in six.iteritems(_DVSPortDesc.from_dvs_port(port_info)):
+            if v:
+                setattr(port_desc, k, v)
         return True
 
     def ports_by_switch_and_key(self, ports):
