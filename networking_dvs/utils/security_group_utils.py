@@ -287,9 +287,9 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, 
     filter_policy = builder.filter_policy(rules, filter_config_key=filter_config_key)
     setting = builder.port_setting()
     setting.filterPolicy = filter_policy
-    spec = builder.port_config_spec(setting=setting)
+    spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
-    spec.version = version
+
     return spec
 
 
