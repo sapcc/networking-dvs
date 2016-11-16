@@ -34,7 +34,7 @@ from neutron.i18n import _LI, _LW, _
 
 from oslo_log import log
 from oslo_service import loopingcall
-from oslo_vmware import vim_util, exceptions, api as vmwareapi
+from oslo_vmware import vim_util, exceptions
 
 from networking_dvs.common import config as dvs_config
 from networking_dvs.utils import dvs_util
@@ -54,18 +54,8 @@ exceptions.register_fault_class('RequestCanceled', RequestCanceledException)
 def _create_session(config):
     """Create Vcenter Session for API Calling."""
     kwargs = {'create_session': True}
-    if config.wsdl_location:
-        kwargs['wsdl_loc'] = config.wsdl_location
-    connection = vmwareapi.VMwareAPISession(
-        config.vsphere_hostname,
-        config.vsphere_login,
-        config.vsphere_password,
-        config.api_retry_count,
-        config.task_poll_interval,
-        **kwargs)
-
+    connection = dvs_util.connect(config, **kwargs)
     atexit.register(connection.logout)
-
     return connection
 
 

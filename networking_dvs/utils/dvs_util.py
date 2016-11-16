@@ -610,13 +610,8 @@ class DVSController(object):
         return True
 
 
-
-def create_network_map_from_config(config, connection=None, pool=None):
-    """Creates physical network to dvs map from config"""
-    kwargs = {}
-    if config.wsdl_location:
-        kwargs['wsdl_loc'] = config.wsdl_location
-
+def connect(config, **kwds):
+    connection = None
     while not connection:
         try:
             connection = api.VMwareAPISession(
@@ -626,11 +621,17 @@ def create_network_map_from_config(config, connection=None, pool=None):
             config.api_retry_count,
             config.task_poll_interval,
             pool_size=config.connections_pool_size,
-            **kwargs)
-            atexit.register(connection.logout)
+            **kwds)
         except ConnectionError:
             LOG.error(_LE("No connection to vSphere"))
             sleep(10)
+
+    return connection
+
+
+def create_network_map_from_config(config, connection=None, pool=None):
+    """Creates physical network to dvs map from config"""
+    connection = connection or connect(config)
     network_map = {}
     for pair in config.network_maps:
         network, dvs = pair.split(':')
@@ -642,7 +643,6 @@ def create_port_map(dvs_list, connect_flag=True):
     port_map = {}
     for dvs in dvs_list:
         port_map[dvs] = dict([[port.key, port] for port in dvs.get_ports(connect_flag)])
-
     return port_map
 
 

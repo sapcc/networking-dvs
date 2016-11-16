@@ -27,6 +27,11 @@ vmware_opts = [
         default=10,
         help=_('number of times an API must be retried upon '
                'session/connection related errors')),
+    cfg.IntOpt(
+        'connections_pool_size',
+        default=100,
+        help=_('number of vsphere connections pool '
+               'must be higher for intensive operations')),
     cfg.StrOpt('vsphere_login', default='administrator',
                help=_("Vsphere login.")),
     cfg.ListOpt('network_maps',
@@ -36,22 +41,6 @@ vmware_opts = [
                help=_("Vsphere host name or IP.")),
     cfg.StrOpt('vsphere_password', default='',
                help=_("Vsphere password.")),
-    cfg.StrOpt(
-        'wsdl_location',
-        default=None,
-        help=_('The location of API SDK Client File.')),
-    cfg.StrOpt(
-        'dv_switch',
-        default="dvSwitch0",
-        help=_('The DVS switch to use for configuring ports')),
-    cfg.StrOpt(
-        'dv_portgroup',
-        default="br-int",
-        help=_('The portgroup to scan for newly plugged devices')),
-    cfg.FloatOpt(
-        'dv_default_vlan',
-        default=1,
-        help=_('The default VLAN of the port group'))
 ]
 
 dvs_opts = [
