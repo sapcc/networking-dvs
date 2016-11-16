@@ -1,4 +1,17 @@
+import eventlet
 import suds.version
+
+
+def yield_function(function):
+    def wrapped(*args, **kwargs):
+        eventlet.sleep(0)
+        value = function(*args, **kwargs)
+        eventlet.sleep(0)
+
+        return value
+
+    setattr(function.im_class, function.__name__, wrapped)
+
 
 if suds.version.__version__ < '0.7':
     from logging import getLogger
@@ -14,43 +27,7 @@ if suds.version.__version__ < '0.7':
 
     suds.mx.appender.ObjectAppender.append = _suds_mx_object_appender_append_workaround
 
-    import eventlet
-
-    def yield_function(function):
-        def wrapped(*args, **kwargs):
-            eventlet.sleep(0)
-            value = function(*args, **kwargs)
-            eventlet.sleep(0)
-
-            return value
-
-        setattr(function.im_class, function.__name__, wrapped)
-
-    import suds.sax.parser
-
-    yield_function(suds.sax.parser.Handler.endElement)
-
-    import suds.wsdl
-
-    def _wdsl_definitions_open_import(self):
-        for imp in self.imports:
-            eventlet.sleep(0)
-            imp.load(self)
-
-    suds.wsdl.Definitions.open_imports = _wdsl_definitions_open_import
-
-    yield_function(suds.wsdl.Definitions.add_children)
-    yield_function(suds.wsdl.Definitions.set_wrapped)
-
-    import suds.reader
-
-    yield_function(suds.reader.DocumentReader.open)
-
     import suds.xsd.schema
-
-    yield_function(suds.xsd.schema.Schema.build)
-    yield_function(suds.xsd.schema.Schema.merge)
-    yield_function(suds.xsd.schema.Schema.instance)
     from suds.xsd.deplist import DepList
 
     def _suds_xsd_schema_dereference(self):
@@ -80,17 +57,9 @@ if suds.version.__version__ < '0.7':
 
     suds.xsd.schema.Schema.dereference = _suds_xsd_schema_dereference
 
-    import suds.umx.core
-
-    yield_function(suds.umx.core.Core.append)
-
-    import suds.xsd.sxbase
-
-    yield_function(suds.xsd.sxbase.Iter.__init__)
-
     import suds.xsd.deplist
 
-    # Looks crappy, might need actually to be patched, or upgraded to 0.7 where they fixed it
+    # Looks crappy, might need actually to be patched properly
     def _suds_xsd_deplist_sort(self):
         self.sorted = list()
         self.pushed = set()
@@ -115,6 +84,42 @@ if suds.version.__version__ < '0.7':
         return self.sorted
 
     suds.xsd.deplist.DepList.sort = _suds_xsd_deplist_sort
+
+if True:
+    import suds.sax.parser
+
+    yield_function(suds.sax.parser.Handler.endElement)
+
+    import suds.wsdl
+
+    def _wdsl_definitions_open_import(self):
+        for imp in self.imports:
+            eventlet.sleep(0)
+            imp.load(self)
+
+    suds.wsdl.Definitions.open_imports = _wdsl_definitions_open_import
+
+    yield_function(suds.wsdl.Definitions.add_children)
+    yield_function(suds.wsdl.Definitions.set_wrapped)
+
+    import suds.reader
+
+    yield_function(suds.reader.DocumentReader.open)
+
+    import suds.xsd.schema
+
+    yield_function(suds.xsd.schema.Schema.build)
+    yield_function(suds.xsd.schema.Schema.merge)
+    yield_function(suds.xsd.schema.Schema.instance)
+
+    import suds.umx.core
+
+    yield_function(suds.umx.core.Core.append)
+
+    import suds.xsd.sxbase
+
+    yield_function(suds.xsd.sxbase.Iter.__init__)
+
 
 
 
