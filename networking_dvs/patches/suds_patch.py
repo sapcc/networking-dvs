@@ -1,6 +1,7 @@
 import suds.version
 
 if suds.version.__version__ < '0.7':
+    from logging import getLogger
     import suds.mx.appender
 
     def _suds_mx_object_appender_append_workaround(self, parent, content):
@@ -38,6 +39,7 @@ if suds.version.__version__ < '0.7':
 
     suds.wsdl.Definitions.open_imports = _wdsl_definitions_open_import
 
+    yield_function(suds.wsdl.Definitions.add_children)
     yield_function(suds.wsdl.Definitions.set_wrapped)
 
     import suds.reader
@@ -49,7 +51,34 @@ if suds.version.__version__ < '0.7':
     yield_function(suds.xsd.schema.Schema.build)
     yield_function(suds.xsd.schema.Schema.merge)
     yield_function(suds.xsd.schema.Schema.instance)
-    yield_function(suds.xsd.schema.Schema.dereference)
+    from suds.xsd.deplist import DepList
+
+    def _suds_xsd_schema_dereference(self):
+        """
+        Instruct all children to perform dereferencing.
+        """
+        all = []
+        indexes = {}
+        for child in self.children:
+            eventlet.sleep(0)
+            child.content(all)
+        deplist = DepList()
+        for x in all:
+            eventlet.sleep(0)
+            x.qualify()
+            midx, deps = x.dependencies()
+            item = (x, tuple(deps))
+            deplist.add(item)
+            indexes[x] = midx
+        for x, deps in deplist.sort():
+            midx = indexes.get(x)
+            if midx is None: continue
+            d = deps[midx]
+            # log.debug('(%s) merging %s <== %s', self.tns[1], repr(x), repr(d))
+            x.merge(d)
+            eventlet.sleep(0)
+
+    suds.xsd.schema.Schema.dereference = _suds_xsd_schema_dereference
 
     import suds.umx.core
 
@@ -86,6 +115,7 @@ if suds.version.__version__ < '0.7':
         return self.sorted
 
     suds.xsd.deplist.DepList.sort = _suds_xsd_deplist_sort
+
 
 
 def apply():
