@@ -212,7 +212,7 @@ class VCenterMonitor(object):
         self._hardware_map = defaultdict(dict)
         # super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
         pool = pool or eventlet
-        self.thread = pool.spawn(self._run, config)
+        self.thread = pool.spawn(self._run_safe, config)
 
     def stop(self):
         try:
@@ -229,8 +229,8 @@ class VCenterMonitor(object):
 
     def _run(self, config):
         LOG.info(_LI("Monitor running... "))
-        self.connection = _create_session(config)
         try:
+            self.connection = _create_session(config)
             connection = self.connection
             vim = connection.vim
             builder = SpecBuilder(vim.client.factory)
@@ -268,6 +268,16 @@ class VCenterMonitor(object):
         finally:
             if self.connection:
                 self.connection.logout
+
+    def _run_safe(self, config):
+        while not self._quit_event.ready():
+            try:
+                self._run(config)
+            except:
+                import traceback, sys
+                traceback.print_exc(file=sys.stdout)
+                os._exit(1)
+
 
     def _create_property_filter(self, property_collector):
         connection = self.connection
