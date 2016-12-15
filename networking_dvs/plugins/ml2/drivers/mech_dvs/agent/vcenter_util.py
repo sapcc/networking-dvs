@@ -30,7 +30,7 @@ import six
 from collections import defaultdict
 from datetime import datetime
 
-from neutron.i18n import _LI, _LW, _
+from neutron.i18n import _LI, _LW, _LE
 
 from oslo_log import log
 from oslo_service import loopingcall
@@ -63,6 +63,30 @@ def _cast(value, _type=str):
     if value is None:
         return None
     return _type(value)
+
+def get_all_cluster_mors(connection):
+    """Get all the clusters in the vCenter."""
+    try:
+        results = connection.invoke_api(vim_util, "get_objects", connection.vim,
+                                        "ClusterComputeResource", 100, ["name"])
+        connection.invoke_api(vim_util, 'cancel_retrieval', connection.vim, results)
+        if results.objects is None:
+            return []
+        else:
+            return results.objects
+
+    except Exception as excep:
+        LOG.warning(_LW("Failed to get cluster references %s"), excep)
+        return []
+
+
+def get_cluster_ref_by_name(connection, cluster_name):
+    """Get reference to the vCenter cluster with the specified name."""
+    all_clusters = get_all_cluster_mors(connection)
+    for cluster in all_clusters:
+        if (hasattr(cluster, 'propSet') and
+                    cluster.propSet[0].val == cluster_name):
+            return cluster.obj
 
 
 @attr.s(slots=True)
@@ -239,7 +263,7 @@ class VCenterMonitor(object):
             wait_options = builder.wait_options(60, 20)
 
             self.property_collector = self._create_property_collector()
-            self._create_property_filter(self.property_collector)
+            self._create_property_filter(self.property_collector, config)
 
             while not self._quit_event.ready():
                 result = connection.invoke_api(vim, 'WaitForUpdatesEx', self.property_collector,
@@ -279,14 +303,23 @@ class VCenterMonitor(object):
                 os._exit(1)
 
 
-    def _create_property_filter(self, property_collector):
+    def _create_property_filter(self, property_collector, config):
         connection = self.connection
         vim = connection.vim
         service_content = vim.service_content
         client_factory = vim.client.factory
 
+        if not config.cluster_name:
+            LOG.info("No cluster specified")
+            container = service_content.rootFolder
+        else:
+            container = get_cluster_ref_by_name(connection, config.cluster_name)
+            if not container:
+                LOG.error(_LE("Cannot find cluster with name '{}'").format(config.cluster_name))
+                exit(2)
+
         container_view = connection.invoke_api(vim, 'CreateContainerView', service_content.viewManager,
-                                               container=service_content.rootFolder,
+                                               container=container,
                                                type=['VirtualMachine'],
                                                recursive=True)
 

@@ -1,7 +1,6 @@
 import eventlet
 import suds.version
 
-
 def yield_function(function):
     def wrapped(*args, **kwargs):
         eventlet.sleep(0)
