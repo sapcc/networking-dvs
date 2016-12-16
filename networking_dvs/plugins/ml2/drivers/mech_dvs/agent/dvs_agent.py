@@ -69,7 +69,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             'binary': 'neutron-dvs-agent',
             'host': self.conf.host,
             'topic': n_const.L2_AGENT_TOPIC,
-            'configurations': {},
+            'configurations': {
+                'network_maps': { physical: dvs for physical, dvs in [ pair.split(':') for pair in self.conf.ML2_VMWARE.network_maps ] }
+            },
             'agent_type': dvs_constants.AGENT_TYPE_DVS,
             'start_flag': True}
 
