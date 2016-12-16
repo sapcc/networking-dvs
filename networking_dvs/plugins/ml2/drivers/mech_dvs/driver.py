@@ -57,24 +57,34 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.info(_LI("try_to_bind_segment_for_agent"))
         LOG.info(context.current)
 
-        compute_device = False
-
+        # We only do compute devices
         device_owner = context.current['device_owner']
 
-        if device_owner and device_owner.startswith('compute'):
-            compute_device = True
-
-        if compute_device and self.check_segment_for_agent(segment, agent):
-            context.set_binding(segment[api.ID],
-                                self.vif_type,
-                                self.vif_details)
-            return True
-        else:
+        if not device_owner or not device_owner.startswith('compute'):
             return False
 
-    def check_segment_for_agent(self, segment, agent):
-        LOG.info(_LI("Checking segment for agent " + str(agent) + " " + str(agent['agent_type'])))
-        return agent['agent_type'] == dvs_constants.AGENT_TYPE_DVS
+        if not agent.get('admin_state_up', False) \
+                or not agent.get('alive', False) \
+                or agent['agent_type'].lower() != dvs_constants.AGENT_TYPE_DVS.lower():
+            return False
+
+        agent_host = agent.get('host', None)
+
+        # If the agent is bound to a host, then it can only handle those
+
+        if agent_host and agent_host != context.current['binding:host_id']:
+            return False
+
+        if not self._check_segment_for_agent(segment, agent):
+            return False
+
+        context.set_binding(segment[api.ID],
+                            self.vif_type,
+                            self.vif_details)
+        return True
+
+    def _check_segment_for_agent(self, segment, agent):
+        return True
 
     def create_network_precommit(self, context):
         LOG.info(_LI("create_network_precommit"))
