@@ -84,8 +84,8 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         return True
 
     def _check_segment_for_agent(self, segment, agent):
-        LOG.info(_LI("Agent: {}".format(agent)))
-        return True
+        LOG.debug(_LI("Agent: {}, Segment: {}".format(agent, segment)))
+        return segment['physical_network'] in agent['configurations'].get('network_maps', {})
 
     def create_network_precommit(self, context):
         LOG.info(_LI("create_network_precommit"))
