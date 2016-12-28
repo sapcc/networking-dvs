@@ -14,6 +14,7 @@
 
 from oslo_log import log
 
+from neutron.agent import securitygroups_rpc
 from neutron.extensions import portbindings
 from neutron.i18n import _LI
 from neutron.plugins.common import constants as p_constants
@@ -38,7 +39,11 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.info(_LI("VMware DVS mechanism driver initializing..."))
         self.agent_type = dvs_constants.AGENT_TYPE_DVS
         self.vif_type = dvs_constants.DVS
-        self.vif_details = {portbindings.CAP_PORT_FILTER: False}
+
+        sg_enabled = securitygroups_rpc.is_firewall_enabled()
+        self.vif_details = {portbindings.CAP_PORT_FILTER: sg_enabled,
+                            portbindings.OVS_HYBRID_PLUG: sg_enabled,
+                            }
 
         super(VMwareDVSMechanismDriver, self).__init__(
             self.agent_type,
@@ -75,17 +80,25 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if agent_host and agent_host != context.current['binding:host_id']:
             return False
 
-        if not self._check_segment_for_agent(segment, agent):
+        mappings = self.get_mappings(agent)
+
+        if not mappings:
             return False
+
+        LOG.debug(_LI("Agent: {}, Segment: {}".format(agent, segment)))
+
+        bridge_name = mappings.get(segment['physical_network'], None)
+
+        if not bridge_name:
+            return False
+
+        vif_details = self.vif_details.copy()
+        vif_details['bridge_name'] = bridge_name
 
         context.set_binding(segment[api.ID],
                             self.vif_type,
-                            self.vif_details)
+                            vif_details)
         return True
-
-    def _check_segment_for_agent(self, segment, agent):
-        LOG.debug(_LI("Agent: {}, Segment: {}".format(agent, segment)))
-        return segment['physical_network'] in agent['configurations'].get('network_maps', {})
 
     def create_network_precommit(self, context):
         LOG.info(_LI("create_network_precommit"))
