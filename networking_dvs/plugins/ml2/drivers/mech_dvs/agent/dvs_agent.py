@@ -35,7 +35,7 @@ from oslo_service import loopingcall
 
 import neutron.context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
-from neutron.common import config as common_config, topics, constants as n_const
+from neutron.common import config as common_config, topics, constants as n_const, utils as neutron_utils
 from neutron.i18n import _LI, _LW, _LE
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
@@ -70,7 +70,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             'host': self.conf.host,
             'topic': n_const.L2_AGENT_TOPIC,
             'configurations': {
-                'network_maps': { physical: dvs for physical, dvs in [ pair.split(':') for pair in self.conf.ML2_VMWARE.network_maps ] }
+                'network_maps': neutron_utils.parse_mappings( self.conf.ML2_VMWARE.network_maps )
             },
             'agent_type': dvs_constants.AGENT_TYPE_DVS,
             'start_flag': True}

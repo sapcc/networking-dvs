@@ -13,12 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import atexit
 from time import sleep
 import uuid
 import six
 
 from neutron.i18n import _LI, _LW, _LE
+from neutron.common import utils as neutron_utils
 from oslo_log import log
 from oslo_utils import timeutils
 from oslo_vmware import api
@@ -418,51 +418,58 @@ class DVSController(object):
 
     def _get_dvs(self, dvs_name, connection):
         """Get the dvs by name"""
-        dcs = connection.invoke_api(
-            vim_util, 'get_objects', connection.vim,
-            'Datacenter', 100, ['name']).objects
-        for dc in dcs:
-            datacenter = dc.obj
-            network_folder = connection.invoke_api(
-                vim_util, 'get_object_property', connection.vim,
-                datacenter, 'networkFolder')
-            results = connection.invoke_api(
-                vim_util, 'get_object_property', connection.vim,
-                network_folder, 'childEntity')
-            if results:
-                networks = results.ManagedObjectReference
-                # Search between top-level dvswitches, if any
-                dvswitches = self._get_object_by_type(
-                    networks, 'VmwareDistributedVirtualSwitch')
+
+        dvs_list = {}
+        with vim_util.WithRetrieval(connection.vim, connection.invoke_api(
+                vim_util, 'get_objects', connection.vim, 'DistributedVirtualSwitch', 100, ['name', 'portgroup']) ) as dvswitches:
                 for dvs in dvswitches:
-                    name = connection.invoke_api(
+                    p = { p.name: p.val for p in dvs.propSet}
+                    if dvs_name == p['name']:
+                        return dvs.obj, DVSController._get_datacenter(connection.vim, dvs.obj)
+                    dvs_list[dvs.obj] = p['portgroup'].ManagedObjectReference
+
+        for dvs, port_groups in six.iteritems(dvs_list):
+            for pg in port_groups:
+                try:
+                    name = self.connection.invoke_api(
                         vim_util, 'get_object_property',
-                        connection.vim, dvs, 'name')
-                    if name == dvs_name:
-                        return dvs, datacenter
-                # if we still haven't found it, search sub-folders
-                dvswitches = self._search_inside_folders(networks,
-                                                         connection)
-                for dvs in dvswitches:
-                    name = connection.invoke_api(
-                        vim_util, 'get_object_property',
-                        connection.vim, dvs, 'name')
-                    if name == dvs_name:
-                        return dvs, datacenter
+                        self.connection.vim, pg, 'name')
+                    if dvs_name == name:
+                        return dvs, DVSController._get_datacenter(connection.vim, dvs)
+                except vmware_exceptions.VimException:
+                    pass
+
         raise exceptions.DVSNotFound(dvs_name=dvs_name)
 
-    def _search_inside_folders(self, net_folders, connection):
-        dvs_list = []
-        folders = self._get_object_by_type(net_folders, 'Folder')
-        for folder in folders:
-            results = connection.invoke_api(
-                vim_util, 'get_object_property', connection.vim,
-                folder, 'childEntity').ManagedObjectReference
-            dvs = self._get_object_by_type(results,
-                                           'VmwareDistributedVirtualSwitch')
-            if dvs:
-                dvs_list += dvs
-        return dvs_list
+    @staticmethod
+    def _get_datacenter(vim, entity_ref, max_objects=100):
+        """Get the inventory path of a managed entity.
+        :param vim: Vim object
+        :param entity_ref: managed entity reference
+        :return: the datacenter of the entity_ref
+        """
+        client_factory = vim.client.factory
+        property_collector = vim.service_content.propertyCollector
+
+        prop_spec = vim_util.build_property_spec(client_factory, 'Datacenter', ['name'])
+        select_set = vim_util.build_selection_spec(client_factory, 'ParentTraversalSpec')
+        select_set = vim_util.build_traversal_spec(
+            client_factory, 'ParentTraversalSpec', 'ManagedEntity', 'parent',
+            False, [select_set])
+        obj_spec = vim_util.build_object_spec(client_factory, entity_ref, select_set)
+        prop_filter_spec = vim_util.build_property_filter_spec(client_factory,
+                                                               [prop_spec], [obj_spec])
+        options = client_factory.create('ns0:RetrieveOptions')
+        options.maxObjects = max_objects
+        retrieve_result = vim.RetrievePropertiesEx(
+            property_collector,
+            specSet=[prop_filter_spec],
+            options=options)
+
+        with vim_util.WithRetrieval(vim, retrieve_result) as objects:
+            for obj in objects:
+                if obj.obj._type == 'Datacenter':
+                    return obj.obj
 
     def _get_pg_by_name(self, pg_name):
         """Get the dpg ref by name"""
@@ -633,8 +640,7 @@ def create_network_map_from_config(config, connection=None, pool=None):
     """Creates physical network to dvs map from config"""
     connection = connection or connect(config)
     network_map = {}
-    for pair in config.network_maps:
-        network, dvs = pair.split(':')
+    for network, dvs in six.iteritems(neutron_utils.parse_mappings(config.network_maps)):
         network_map[network] = DVSController(dvs, connection=connection, pool=pool)
     return network_map
 
