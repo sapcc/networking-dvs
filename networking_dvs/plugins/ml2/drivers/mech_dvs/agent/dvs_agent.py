@@ -79,7 +79,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         report_interval = self.conf.AGENT.report_interval or 5
         heartbeat = loopingcall.FixedIntervalLoopingCall(self._report_state)
-        heartbeat.start(interval=report_interval)
+        heartbeat.start(interval=report_interval, stop_on_exception=False)
 
         self.polling_interval = 10
 
