@@ -80,8 +80,27 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         for port in ports:
             if port:
+                port = port.copy()
                 port_desc = port['port_desc']
                 ports_by_switch[port_desc.dvs_uuid].append(port)
+                security_group_rules = port['security_group_rules']
+                patched_security_group_rules = []
+
+                for rule in security_group_rules:
+                    if not 'protocol' in rule:
+                        for proto in ['icmp', 'udp', 'tcp']:
+                            new_rule = rule.copy()
+                            new_rule.update(protocol=proto,
+                                            port_range_min=0,
+                                            port_range_max=65535)
+                            patched_security_group_rules.append(new_rule)
+                    else:
+                        patched_security_group_rules.append(rule)
+
+                port['security_group_rules'] = patched_security_group_rules
+                LOG.debug("Got:    {}".format(security_group_rules))
+                LOG.debug("Result: {}".format(patched_security_group_rules))
+
 
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
