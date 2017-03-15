@@ -1,5 +1,5 @@
-import six
-
+import os, six
+from datadog.dogstatsd import DogStatsd
 
 def dict_merge(dct, merge_dct):
     """ Recursive dict merge. Inspired by :meth:``dict.update()``, instead of
@@ -16,3 +16,9 @@ def dict_merge(dct, merge_dct):
             dict_merge(dct[k], merge_dct[k])
         else:
             dct[k] = merge_dct[k]
+
+
+stats = DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
+                  port=int(os.getenv('STATSD_PORT', 9125)),
+                  namespace=os.getenv('STATSD_PREFIX', 'openstack')
+                  )

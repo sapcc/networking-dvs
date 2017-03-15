@@ -41,7 +41,7 @@ from neutron.i18n import _LI, _LW, _LE
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
 from networking_dvs.common import constants as dvs_constants, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
-from networking_dvs.common.util import dict_merge
+from networking_dvs.common.util import dict_merge, stats
 
 
 LOG = logging.getLogger(__name__)
@@ -207,19 +207,17 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _handle_sighup(self, signum, frame):
         self.catch_sighup = True
 
+    @stats.timed()
     def _scan_ports(self):
         try:
-            with timeutils.StopWatch() as w2:
-                ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
-                update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
-                missing = self._read_neutron_ports(ports_by_mac)
-                update_ports_thread.wait()
-                for mac in missing:
-                    del ports_by_mac[mac]
+            ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
+            update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
+            missing = self._read_neutron_ports(ports_by_mac)
+            update_ports_thread.wait()
+            for mac in missing:
+                del ports_by_mac[mac]
 
-            LOG.debug(_LI("Scan {} ports completed in {:1.3g}s (Missing {})".format(len(ports_by_mac),
-                                                                                    w2.elapsed(),
-                                                                                    missing)))
+            LOG.debug(_LI("Scan {} ports completed (Missing {})".format(len(ports_by_mac), missing)))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
@@ -229,11 +227,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _read_neutron_ports(self, ports_by_mac):
         macs = set(six.iterkeys(ports_by_mac))
         if macs:
-            with timeutils.StopWatch() as w:
+            with stats.timed('%s.%s' % (self.__module__, self.__class__.__name__)):
                 neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
                                                                          agent_id=self.agent_id,
                                                                          host=self.conf.host)
-            LOG.info(_LI("get_devices_details_list took {:1.3g}s").format(w.elapsed()))
         else:
             neutron_ports = []
         for neutron_info in neutron_ports:
@@ -268,6 +265,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         port_up_ids = []
         port_down_ids = []
 
+        now = None
         with timeutils.StopWatch() as w:
             for port_key in succeeded_keys:
                 port = dvs.ports_by_key[port_key]
@@ -278,11 +276,19 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 else:
                     port_down_ids.append(port_id)
 
+                port_desc = port.get('port_desc', None)
+                if port_desc and port_desc.connected_since:
+                    now = now or timeutils.utcnow()
+                    stats.timing('networking_dvs.ports.bound.latency', now - port_desc.connected_since)
+
+        stats.increment('networking_dvs.ports.bound.count', len(succeeded_keys))
+        if failed_keys:
+            stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
+
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
 
-        LOG.info(_LI("_bound_ports took {:1.3g}s").format(w.elapsed()))
-
+    @stats.timed()
     def process_ports(self):
         # LOG.info("******* Processing Ports *******")
         deleted_ports = self.deleted_ports.copy()
@@ -323,9 +329,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
-            with timeutils.StopWatch() as w:
-                self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
-            LOG.info(_LI("bind_ports took {:1.3g}s").format(w.elapsed()))
+            self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -350,11 +354,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             dvs.apply_queued_update_specs()
 
     def _update_device_list(self, port_down_ids, port_up_ids):
-        with timeutils.StopWatch() as w:
+        with stats.timed('%s.%s' % (self.__module__, self.__class__.__name__)):
             LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                       self.agent_id, self.conf.host))
             self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
-        LOG.info(_LI("update_device_list took {:1.3g}s").format(w.elapsed()))
 
     def rpc_loop(self):
         while self._check_and_handle_signal():

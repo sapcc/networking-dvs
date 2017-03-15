@@ -198,18 +198,16 @@ class DVSController(object):
         yield(specs[first:])
 
     def apply_queued_update_specs(self):
-        with timeutils.StopWatch() as w:
-            callbacks, update_specs_by_key = self._get_queued_update_changes()
+        callbacks, update_specs_by_key = self._get_queued_update_changes()
 
-            if not update_specs_by_key:
-                return
+        if not update_specs_by_key:
+            return
 
-            results = []
-            for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in self._chunked_update_specs(six.itervalues(update_specs_by_key))]):
-                if result:
-                    results.extend(result)
+        results = []
+        for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in self._chunked_update_specs(six.itervalues(update_specs_by_key))]):
+            if result:
+                results.extend(result)
 
-        LOG.debug("apply_queued_update_specs took {:1.3g}s".format(w.elapsed()))
         return results
 
     def _apply_queued_update_specs(self, update_specs, callbacks, retries=5):

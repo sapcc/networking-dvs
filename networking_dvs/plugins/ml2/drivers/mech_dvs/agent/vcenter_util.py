@@ -36,7 +36,7 @@ from oslo_log import log
 from oslo_service import loopingcall
 from oslo_vmware import vim_util, exceptions
 
-from networking_dvs.common import config as dvs_config
+from networking_dvs.common import config as dvs_config, util as c_util
 from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
 
@@ -103,6 +103,7 @@ class _DVSPortDesc(object):
     vlan_id = attr.ib(default=None)
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
+    connected_since = attr.ib(default=None)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
@@ -436,6 +437,7 @@ class VCenterMonitor(object):
                                                                (self.iteration - iteration)))
             elif not port_desc in self.changed:
                 LOG.debug("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+            port_desc.connected_since = now
             self.changed.add(port_desc)
         else:
             power_state = self._hardware_map[port_desc.vmobref].get('power_state', None)
@@ -506,6 +508,7 @@ class VCenter(object):
 
         return ports_by_switch_and_key
 
+    @c_util.stats.timed()
     @dvs_util.wrap_retry
     def bind_ports(self, ports, callback=None):
         ports_by_switch_and_key = self.ports_by_switch_and_key(ports)
