@@ -98,9 +98,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                         patched_security_group_rules.append(rule)
 
                 port['security_group_rules'] = patched_security_group_rules
-                LOG.debug("Got:    {}".format(security_group_rules))
-                LOG.debug("Result: {}".format(patched_security_group_rules))
-
 
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)

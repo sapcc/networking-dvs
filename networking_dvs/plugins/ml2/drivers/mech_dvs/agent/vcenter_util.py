@@ -64,6 +64,7 @@ def _cast(value, _type=str):
         return None
     return _type(value)
 
+
 def get_all_cluster_mors(connection):
     """Get all the clusters in the vCenter."""
     try:
@@ -272,9 +273,10 @@ class VCenterMonitor(object):
                 if result:
                     version = result.version
                     if result.filterSet and result.filterSet[0].objectSet:
+                        now = datetime.utcnow()
                         for update in result.filterSet[0].objectSet:
                             if update.obj._type == 'VirtualMachine':
-                                self._handle_virtual_machine(update)
+                                self._handle_virtual_machine(update, now)
 
                 for port_desc in self.changed:
                     self._put(self.queue, port_desc)
@@ -283,7 +285,7 @@ class VCenterMonitor(object):
                 now = datetime.utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     if port_desc.status != 'untried' or 0 == self.iteration - iteration:
-                        print("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+                        LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
         except RequestCanceledException, e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
@@ -301,7 +303,6 @@ class VCenterMonitor(object):
                 import traceback, sys
                 traceback.print_exc(file=sys.stdout)
                 os._exit(1)
-
 
     def _create_property_filter(self, property_collector, config):
         connection = self.connection
@@ -327,7 +328,7 @@ class VCenterMonitor(object):
                                                        False, None)
         object_spec = vim_util.build_object_spec(client_factory, container_view, [traversal_spec])
 
-        # Only static types work, so we have to get all hardware, still faster then retrieving individual items
+        # Only static types work, so we have to get all hardware, still faster than retrieving individual items
         vm_properties = ['runtime.powerState', 'config.hardware.device']
         property_specs = [vim_util.build_property_spec(client_factory, 'VirtualMachine', vm_properties)]
 
@@ -354,7 +355,7 @@ class VCenterMonitor(object):
                 self.untried_ports.pop(mac_address, None)
                 self.changed.add(port_desc)
 
-    def _handle_virtual_machine(self, update):
+    def _handle_virtual_machine(self, update, now):
         vmobref = str(update.obj.value)  # String 'vmobref-#'
         change_set = getattr(update, 'changeSet', [])
 
@@ -387,7 +388,7 @@ class VCenterMonitor(object):
                             ))
 
                         vm_hw[port_desc.device_key] = port_desc
-                        self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc, now)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vmobref)
             elif change_name.startswith("config.hardware.device["):
@@ -398,20 +399,20 @@ class VCenterMonitor(object):
                     attribute = change_name[id_end + 2:]
                     if "connectable.connected" == attribute:
                         port_desc.connected = change.val
-                        self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc, now)
                     elif "connectable.status" == attribute:
                         port_desc.status = change.val
-                        self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc, now)
                     elif "macAddress" == attribute:
                         port_desc.mac_address = str(change.val)
-                        self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc, now)
 
             elif change_name == 'runtime.powerState':
                 # print("{}: {}".format(vm, change.val))
                 vm_hw['power_state'] = change.val
                 for port_desc in six.itervalues(vm_hw):
                     if isinstance(port_desc, _DVSPortMonitorDesc):
-                        self._handle_port_update(port_desc)
+                        self._handle_port_update(port_desc, now)
             else:
                 LOG.debug(change)
 
@@ -420,8 +421,7 @@ class VCenterMonitor(object):
         else:
             pass
 
-    def _handle_port_update(self, port_desc):
-        now = datetime.utcnow()
+    def _handle_port_update(self, port_desc, now):
         mac_address = port_desc.mac_address
 
         if not mac_address:
