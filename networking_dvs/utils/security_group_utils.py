@@ -316,9 +316,12 @@ def _create_rule(builder, rule_info, ip=None, name=None):
     if rule_info['direction'] == 'ingress':
         rule_class = IngressRule
         cidr = rule_info.get('source_ip_prefix')
+        source_port_range_min_default = 1
     else:
         rule_class = EgressRule
         cidr = rule_info.get('dest_ip_prefix')
+        source_port_range_min_default = dvs_const.MIN_EPHEMERAL_PORT
+
     rule = rule_class(
         spec_builder=builder,
         ethertype=rule_info['ethertype'],
@@ -332,7 +335,7 @@ def _create_rule(builder, rule_info, ip=None, name=None):
                            rule_info.get('port_range_max'))
         rule.backward_port_range = (
             rule_info.get(
-                'source_port_range_min') or dvs_const.MIN_EPHEMERAL_PORT,
+                'source_port_range_min') or source_port_range_min_default,
             rule_info.get(
                 'source_port_range_max') or dvs_const.MAX_EPHEMERAL_PORT)
     return rule
