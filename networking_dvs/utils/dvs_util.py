@@ -20,13 +20,13 @@ import six
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
 from oslo_log import log
-from oslo_utils import timeutils
 from oslo_vmware import api
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
 from requests.exceptions import ConnectionError
 
 from networking_dvs.common import constants as dvs_const
+from networking_dvs.common.util import stats
 from networking_dvs.common import exceptions
 from networking_dvs.utils import spec_builder
 
@@ -174,6 +174,7 @@ class DVSController(object):
 
     def queue_update_specs(self, update_specs, callback=None):
         self._update_spec_queue.append((update_specs, [callback]))
+        stats.gauge('networking_dvs.update_spec_queue_length', len(self._update_spec_queue))
 
     @staticmethod
     def _chunked_update_specs(specs, limit=500):
@@ -282,6 +283,8 @@ class DVSController(object):
         update_specs_by_key = {}
         update_spec_queue = self._update_spec_queue
         self._update_spec_queue = []
+        stats.gauge('networking_dvs.update_spec_queue', len(self._update_spec_queue))
+
         for _update_specs, _callbacks in update_spec_queue:
             if _callbacks:
                 callbacks.extend(_callbacks)
