@@ -279,9 +279,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 port_desc = port.get('port_desc', None)
                 if port_desc and port_desc.connected_since:
                     now = now or timeutils.utcnow()
-                    stats.timing('networking_dvs.ports.bound.latency', now - port_desc.connected_since)
+                    stats.timing('networking_dvs.ports.bound', now - port_desc.connected_since)
 
-        stats.increment('networking_dvs.ports.bound.count', len(succeeded_keys))
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
 

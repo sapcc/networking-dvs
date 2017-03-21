@@ -4,9 +4,10 @@ from collections import defaultdict
 from neutron.agent import firewall
 from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
+from oslo_utils.timeutils import utcnow
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
-from networking_dvs.common.util import dict_merge
+from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent.vcenter_util import VCenter
 
 LOG = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         LOG.info("security_group_updated action type {} ids {} device {}".format(action_type, sec_group_ids, device_id))
 
     def _process_port_filter(self, ports):
+        now = utcnow()
         LOG.info(_LI("Set security group rules for ports %s"),
                  [p['id'] for p in ports])
 
@@ -67,15 +69,30 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 self._ports_by_device_id[stored['device']] = stored
             else:
                 LOG.error(_LE("Unknown port {}").format(port_id))
-        self._apply_sg_rules_for_port(stored_ports)
+        self._apply_sg_rules_for_port(stored_ports, now)
 
     def _remove_sg_from_dvs_port(self, port_ids):
         LOG.info(_LI("Clean up security group rules on deleted ports {}").format(port_ids))
         for port_id in port_ids:
             self._ports_by_device_id.pop(port_id, None)
 
+    @staticmethod
+    def _update_port_rules_callback(dvs, succeeded_keys, failed_keys):
+        now = None
+        for port_key in succeeded_keys:
+            port = dvs.ports_by_key[port_key]
+            port_desc = port.get('port_desc', None)
+            if port_desc and port_desc.queued_since:
+                now = now or utcnow()
+                stats.timing('networking_dvs.security_group_updates', now - port_desc.queued_since)
+                port_desc.queued_since = None
+
+        if failed_keys:
+            stats.increment('networking_dvs.security_group_updates.failures', len(failed_keys))
+
     @dvs_util.wrap_retry
-    def _apply_sg_rules_for_port(self, ports):
+    def _apply_sg_rules_for_port(self, ports, now=None):
+        now = now or utcnow()
         ports_by_switch = defaultdict(list)
 
         for port in ports:
@@ -85,6 +102,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 ports_by_switch[port_desc.dvs_uuid].append(port)
                 security_group_rules = port['security_group_rules']
                 patched_security_group_rules = []
+                port_desc.queued_since = port_desc.queued_since or now
 
                 for rule in security_group_rules:
                     if not 'protocol' in rule:
@@ -102,4 +120,4 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             LOG.info("DVS {} {}".format(dvs_uuid, [port.get('id', port.get('device_id', 'Missing')) for port in port_list]))
-            sg_util.update_port_rules(dvs, port_list)
+            sg_util.update_port_rules(dvs, port_list, callback=self._update_port_rules_callback)

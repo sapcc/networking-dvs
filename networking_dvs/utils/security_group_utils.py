@@ -240,14 +240,14 @@ def build_port_rules(builder, ports, hashed_rules = None):
 
 
 @dvs_util.wrap_retry
-def update_port_rules(dvs, ports):
+def update_port_rules(dvs, ports, callback=None):
     if not ports:
         return
 
     builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
     hashed_rules = {}
     port_config_list = build_port_rules(builder, ports, hashed_rules)
-    dvs.queue_update_specs(port_config_list)
+    dvs.queue_update_specs(port_config_list, callback=callback)
 
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):

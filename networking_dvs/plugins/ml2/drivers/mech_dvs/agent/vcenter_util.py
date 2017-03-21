@@ -28,11 +28,11 @@ import attr
 import six
 
 from collections import defaultdict
-from datetime import datetime
 
 from neutron.i18n import _LI, _LW, _LE
 
 from oslo_log import log
+from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_vmware import vim_util, exceptions
 
@@ -104,6 +104,7 @@ class _DVSPortDesc(object):
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
     connected_since = attr.ib(default=None)
+    queued_since = attr.ib(default=None)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
@@ -274,7 +275,7 @@ class VCenterMonitor(object):
                 if result:
                     version = result.version
                     if result.filterSet and result.filterSet[0].objectSet:
-                        now = datetime.utcnow()
+                        now = utcnow()
                         for update in result.filterSet[0].objectSet:
                             if update.obj._type == 'VirtualMachine':
                                 self._handle_virtual_machine(update, now)
@@ -283,7 +284,7 @@ class VCenterMonitor(object):
                     self._put(self.queue, port_desc)
                 self.changed.clear()
 
-                now = datetime.utcnow()
+                now = utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     if port_desc.status != 'untried' or 0 == self.iteration - iteration:
                         LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
