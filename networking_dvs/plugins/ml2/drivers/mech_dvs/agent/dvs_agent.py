@@ -353,7 +353,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             dvs.apply_queued_update_specs()
 
     def _update_device_list(self, port_down_ids, port_up_ids):
-        with stats.timed('%s.%s' % (self.__module__, self.__class__.__name__)):
+        with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
             LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                       self.agent_id, self.conf.host))
             self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
