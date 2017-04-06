@@ -628,6 +628,8 @@ def connect(config, **kwds):
             config.vsphere_password,
             config.api_retry_count,
             config.task_poll_interval,
+            cacert=config.ca_certs,
+            insecure=False if config.ca_certs else True,
             pool_size=config.connections_pool_size,
             **kwds)
         except ConnectionError:

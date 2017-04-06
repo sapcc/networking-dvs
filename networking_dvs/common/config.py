@@ -43,6 +43,9 @@ vmware_opts = [
                help=_("Vsphere password.")),
     cfg.StrOpt('cluster_name', default='',
                help=_("Name of the cluster.")),
+    cfg.StrOpt('ca_certs',
+               default='',
+               help=_("Path to certificates bundle.")),
 ]
 
 dvs_opts = [
