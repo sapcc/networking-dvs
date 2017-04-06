@@ -17,3 +17,5 @@ oslo.vmware>=0.5
 
 datadog
 attrs                           # MIT License
+
+mock
