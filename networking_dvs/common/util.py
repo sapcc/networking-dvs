@@ -1,6 +1,4 @@
 import os, six
-from datadog.dogstatsd import DogStatsd
-from mock import Mock
 
 def dict_merge(dct, merge_dct):
     """ Recursive dict merge. Inspired by :meth:``dict.update()``, instead of
@@ -19,8 +17,25 @@ def dict_merge(dct, merge_dct):
             dct[k] = merge_dct[k]
 
 if os.getenv('STATSD_MOCK', False):
+    from mock import Mock
     stats = Mock()
+
+    class WithDecorator(object):
+        def __enter__(self):
+            pass
+        def __exit__(self, type, value, traceback):
+            pass
+        def __call__(self, func):
+            def wrapped(*args, **kwargs):
+                return func(*args, **kwargs)
+            return wrapped
+
+    def timed(*args, **kwargs):
+            return WithDecorator()
+
+    stats.timed = timed
 else:
+    from datadog.dogstatsd import DogStatsd
     stats = DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
                       port=int(os.getenv('STATSD_PORT', 9125)),
                       namespace=os.getenv('STATSD_PREFIX', 'openstack')
