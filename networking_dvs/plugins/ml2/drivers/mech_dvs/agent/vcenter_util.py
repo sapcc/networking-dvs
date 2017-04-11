@@ -407,6 +407,11 @@ class VCenterMonitor(object):
                         self._handle_port_update(port_desc, now)
                     elif "macAddress" == attribute:
                         port_desc.mac_address = str(change.val)
+                    elif "backing.port.connectionCookie" == attribute:
+                        port_desc.connection_cookie = str(change.val)
+                        self._handle_port_update(port_desc, now)
+                    elif "backing.port.portKey" == attribute:
+                        port_desc.port_key = str(change.val)
                         self._handle_port_update(port_desc, now)
 
             elif change_name == 'runtime.powerState':
