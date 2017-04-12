@@ -157,7 +157,10 @@ class SpecBuilder(spec_builder.SpecBuilder):
     def neutron_to_port_config_spec(self, port):
         port_desc = port['port_desc']
         setting = self.port_setting()
-        setting.vlan=self.vlan(port["segmentation_id"])
+        if port["segmentation_id"]:
+            setting.vlan=self.vlan(port["segmentation_id"])
+        else:
+            setting.vlan=self.vlan(0)
         setting.blocked=self.blocked(not port["admin_state_up"])
         setting.filterPolicy=self.filter_policy(None)
 
@@ -524,7 +527,8 @@ class VCenter(object):
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             specs = []
             for port in six.itervalues(ports_by_key):
-                if port["network_type"] == "vlan" and not port["segmentation_id"] is None:
+                if (port["network_type"] == "vlan" and not port["segmentation_id"] is None) \
+                        or port["network_type"] == "flat":
                     spec = builder.neutron_to_port_config_spec(port)
                     specs.append(spec)
 

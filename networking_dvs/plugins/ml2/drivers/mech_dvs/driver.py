@@ -53,7 +53,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.info(_LI("VMware DVS mechanism driver initialized..."))
 
     def get_allowed_network_types(self, agent):
-        return ([p_constants.TYPE_VLAN])
+        return ([p_constants.TYPE_VLAN, p_constants.TYPE_FLAT])
 
     def get_mappings(self, agent):
         return agent['configurations'].get('network_maps', {'default': 'dvSwitch0'})
