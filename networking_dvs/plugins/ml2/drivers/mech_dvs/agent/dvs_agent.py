@@ -307,7 +307,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
 
-        ports_to_bind = list(six.iterkeys(updated_ports))
+        ports_to_bind = list(self.api.uuid_port_map[port_id] for port_id in six.iterkeys(updated_ports))
 
         for port in found_ports:
             port_segmentation_id = port.get('segmentation_id', None)
