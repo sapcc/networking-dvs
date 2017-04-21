@@ -43,6 +43,7 @@ from networking_dvs.utils import spec_builder
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
+SECURITY_GROUPS_ATTRIBUTE = "NeutronSecurityGroups"
 
 class RequestCanceledException(exceptions.VimException):
     msg_fmt = _("The task was canceled by a user.")
@@ -487,8 +488,38 @@ class VCenter(object):
 
         self.uuid_dvs_map = {}
 
+        self.security_groups_attribute_key = -1
+
         for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.uuid_dvs_map[dvs.uuid] = dvs
+
+    def setup_security_groups_support(self):
+        """
+        We will track security groups -> dvportgroup mapping though the use
+        of custom attributes.
+
+        A custom attribute must be defined initially and then queried at
+        start for its id, which is then used to map to a particular value.
+        """
+        service_content = self.connection.vim.retrieve_service_content()
+        custom_field_manager = service_content.customFieldsManager
+
+        result = vim_util.get_object_properties(self.connection.vim,
+                                                custom_field_manager, "field")
+        for field in result[0].propSet[0].val.CustomFieldDef:
+            if SECURITY_GROUPS_ATTRIBUTE == field.name:
+                LOG.debug("Found custom attribute for security groups with key %s", field.key)
+                self.security_groups_attribute_key = field.key
+                break
+        else:
+            LOG.debug("No custom attribute for security groups found, will create one.")
+            field = self.connection.invoke_api(self.connection.vim,
+                                               "AddCustomFieldDef",
+                                               custom_field_manager,
+                                               name=SECURITY_GROUPS_ATTRIBUTE,
+                                               moType="DistributedVirtualPortgroup")
+            LOG.debug("Created custom attribute for security groups with key %s", field.key)
+            self.security_groups_attribute_key = field.key
 
     @staticmethod
     def update_port_desc(port, port_info):

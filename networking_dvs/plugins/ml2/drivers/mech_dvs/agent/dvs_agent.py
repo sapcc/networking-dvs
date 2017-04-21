@@ -88,6 +88,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         self.enable_security_groups = self.conf.get('SECURITYGROUP', {}).get('enable_security_group', False)
         # Security group agent support
         if self.enable_security_groups:
+            self.api.setup_security_groups_support()
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
                                                         self.sg_plugin_rpc,
                                                         local_vlan_map=None,
