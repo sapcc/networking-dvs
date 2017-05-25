@@ -338,3 +338,20 @@ def _create_rule(builder, rule_info, ip=None, name=None):
             rule_info.get(
                 'source_port_range_max') or dvs_const.MAX_EPHEMERAL_PORT)
     return rule
+
+
+def _patch_sg_rules(security_group_rules):
+    patched_rules = []
+
+    for rule in security_group_rules:
+        if not 'protocol' in rule:
+            for proto in ['icmp', 'udp', 'tcp']:
+                new_rule = rule.copy()
+                new_rule.update(protocol=proto,
+                                port_range_min=0,
+                                port_range_max=65535)
+                patched_rules.append(new_rule)
+        else:
+            patched_rules.append(rule)
+
+    return patched_rules

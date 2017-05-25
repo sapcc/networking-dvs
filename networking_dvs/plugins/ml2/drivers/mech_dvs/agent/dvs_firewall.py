@@ -111,7 +111,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port = port.copy()
             port_desc = port['port_desc']
             port_desc.queued_since = port_desc.queued_since or now
-            port['security_group_rules'] = _patch_sg_rules(port['security_group_rules'])
+            port['security_group_rules'] = sg_util._patch_sg_rules(port['security_group_rules'])
             ports_by_switch[port_desc.dvs_uuid].append(port)
 
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
@@ -121,20 +121,3 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port_rules = sg_util.get_port_rules(dvs, port_list)
 
             dvs.queue_update_specs(port_rules, callback=self._update_port_rules_callback)
-
-
-def _patch_sg_rules(security_group_rules):
-    patched_security_group_rules = []
-
-    for rule in security_group_rules:
-        if not 'protocol' in rule:
-            for proto in ['icmp', 'udp', 'tcp']:
-                new_rule = rule.copy()
-                new_rule.update(protocol=proto,
-                                port_range_min=0,
-                                port_range_max=65535)
-                patched_security_group_rules.append(new_rule)
-        else:
-            patched_security_group_rules.append(rule)
-
-    return patched_security_group_rules
