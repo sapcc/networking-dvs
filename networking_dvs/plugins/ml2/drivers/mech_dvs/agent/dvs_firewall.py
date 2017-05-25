@@ -59,6 +59,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                  [p['id'] for p in ports])
 
         merged_ports = self._merge_port_info_from_vcenter(ports)
+        self._update_ports_by_device_id(merged_ports)
+
         self._apply_sg_rules_for_port(merged_ports, now)
 
     def _merge_port_info_from_vcenter(self, ports):
@@ -70,10 +72,13 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 # print("Found port  {}".format(port_id))
                 dict_merge(vcenter_port, port)
                 merged_ports.append(vcenter_port)
-                self._ports_by_device_id[vcenter_port['device']] = vcenter_port
             else:
                 LOG.error(_LE("Unknown port {}").format(port_id))
         return merged_ports
+
+    def _update_ports_by_device_id(self, ports):
+        for port in ports:
+            self._ports_by_device_id[port['device']] = port
 
     def _remove_sg_from_dvs_port(self, port_ids):
         LOG.info(_LI("Clean up security group rules on deleted ports {}").format(port_ids))
