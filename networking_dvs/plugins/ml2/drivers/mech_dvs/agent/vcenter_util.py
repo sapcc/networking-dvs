@@ -90,10 +90,10 @@ def get_cluster_ref_by_name(connection, cluster_name):
             return cluster.obj
 
 
-@attr.s(slots=True)
+@attr.s(cmp=True, hash=True, slots=True)
 class _DVSPortDesc(object):
-    dvs_uuid = attr.ib(convert=str)
-    port_key = attr.ib(convert=str)
+    dvs_uuid = attr.ib(convert=str, cmp=True)
+    port_key = attr.ib(convert=str, cmp=True)
     port_group_key = attr.ib(convert=str) # It is an int, but the WDSL defines it as a string
     mac_address = attr.ib(convert=str)
     connection_cookie = attr.ib(convert=str) # Same as with port_key, int which is represented as a string
