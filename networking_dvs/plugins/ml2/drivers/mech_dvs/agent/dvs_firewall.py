@@ -1,3 +1,5 @@
+import pprint
+
 import six
 from collections import defaultdict
 
@@ -9,6 +11,7 @@ from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent.vcenter_util import VCenter
+from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
@@ -115,9 +118,22 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             ports_by_switch[port_desc.dvs_uuid].append(port)
 
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
+            dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+            client_factory = dvs.connection.vim.client.factory
+            port_rules_per_sg_sets = sg_util.get_port_rules_per_sg_sets(client_factory, port_list)
+
+            sg_sets = set(port_rules_per_sg_sets.iterkeys())
+
             LOG.info("DVS {} {}".format(dvs_uuid, [port.get('id', port.get('device_id', 'Missing')) for port in port_list]))
 
-            dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            port_rules = sg_util.get_port_rules(dvs, port_list)
+            pg_per_sg = dvs.get_pg_per_sg_attribute(self.v_center.security_groups_attribute_key)
+            existing_sg_sets = set(pg_per_sg.iterkeys())
 
+            sg_sets_to_create = sg_sets.difference(existing_sg_sets)
+
+            LOG.debug("pg_per_sg are: %s", pprint.pformat(pg_per_sg))
+
+            port_rules = sg_util.get_port_rules(client_factory, port_list)
             dvs.queue_update_specs(port_rules, callback=self._update_port_rules_callback)
+
+

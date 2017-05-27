@@ -25,7 +25,6 @@ from oslo_log import log
 from neutron.i18n import _LI
 
 from networking_dvs.common import constants as dvs_const, exceptions
-from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
@@ -242,12 +241,11 @@ def build_port_rules(builder, ports, hashed_rules = None):
     return port_config_list
 
 
-@dvs_util.wrap_retry
-def get_port_rules(dvs, ports):
+def get_port_rules(client_factory, ports):
     if not ports:
         return
 
-    builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
+    builder = PortConfigSpecBuilder(client_factory)
     hashed_rules = {}
     return build_port_rules(builder, ports, hashed_rules)
 
@@ -359,15 +357,20 @@ def _patch_sg_rules(security_group_rules):
 
     return patched_rules
 
-def _get_rules_per_sg_sets_from_port(ports):
+def get_port_rules_per_sg_sets(client_factory, ports):
     """
     Returns a dict mapping the available security group sets from the given ports
     to all of their security group rules.
 
     A security group set is a comma-separated, sorted list of security group ids
     """
-    result = defaultdict(list)
+    sg_rules_per_sg_sets = defaultdict(list)
     for port in ports:
         sg_set = string.join(sorted(port['security_groups']), ",")
-        result[sg_set].extend(port['security_group_rules'])
-    return result
+        sg_rules_per_sg_sets[sg_set].extend(port['security_group_rules'])
+
+    builder = PortConfigSpecBuilder(client_factory)
+    port_rules_per_sg_sets = {sg_set : port_configuration(builder, None, sg_rules, {}, None, None)
+                              for sg_set, sg_rules in sg_rules_per_sg_sets.iteritems()}
+
+    return port_rules_per_sg_sets
