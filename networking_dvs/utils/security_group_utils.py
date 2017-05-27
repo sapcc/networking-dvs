@@ -357,10 +357,10 @@ def _patch_sg_rules(security_group_rules):
 
     return patched_rules
 
-def get_port_rules_per_sg_sets(client_factory, ports):
+def get_port_config_per_sg_sets(client_factory, ports):
     """
     Returns a dict mapping the available security group sets from the given ports
-    to all of their security group rules.
+    to a port config that contains a unification of their security groups' rules.
 
     A security group set is a comma-separated, sorted list of security group ids
     """
@@ -370,7 +370,7 @@ def get_port_rules_per_sg_sets(client_factory, ports):
         sg_rules_per_sg_sets[sg_set].extend(port['security_group_rules'])
 
     builder = PortConfigSpecBuilder(client_factory)
-    port_rules_per_sg_sets = {sg_set : port_configuration(builder, None, sg_rules, {}, None, None)
+    port_rules_per_sg_sets = {sg_set : port_configuration(builder, None, sg_rules, {}, None, None).setting
                               for sg_set, sg_rules in sg_rules_per_sg_sets.iteritems()}
 
     return port_rules_per_sg_sets

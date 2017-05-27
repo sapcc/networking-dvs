@@ -394,7 +394,7 @@ class DVSController(object):
                 key=sg_attr_key,
                 value=sg_set)
 
-            return vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])
+            return vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 

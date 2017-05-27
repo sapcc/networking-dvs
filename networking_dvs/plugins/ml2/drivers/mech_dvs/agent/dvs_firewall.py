@@ -120,7 +120,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for dvs_uuid, port_list in six.iteritems(ports_by_switch):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             client_factory = dvs.connection.vim.client.factory
-            port_rules_per_sg_sets = sg_util.get_port_rules_per_sg_sets(client_factory, port_list)
+            port_rules_per_sg_sets = sg_util.get_port_config_per_sg_sets(client_factory, port_list)
 
             sg_sets = set(port_rules_per_sg_sets.iterkeys())
 
@@ -131,9 +131,19 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             sg_sets_to_create = sg_sets.difference(existing_sg_sets)
 
-            LOG.debug("pg_per_sg are: %s", pprint.pformat(pg_per_sg))
+            # apply port rules for existing dvportgroups matched to security groups
+
+
+            # create dvportgroups for non-existing security group sets and apply port rules
+            for sg_set in sg_sets_to_create:
+                pg_key = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
+                                            sg_set, port_rules_per_sg_sets[sg_set])
+                pg_per_sg[sg_set] = pg_key
+
+
+            # reassign vms if they are not in the correct dvportgroup according to their security groups
+            # Q: how to prevent loops ? (as the dvs agent will see a new port comming up..)
 
             port_rules = sg_util.get_port_rules(client_factory, port_list)
             dvs.queue_update_specs(port_rules, callback=self._update_port_rules_callback)
-
 
