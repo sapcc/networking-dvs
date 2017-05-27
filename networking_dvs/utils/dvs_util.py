@@ -16,6 +16,7 @@
 from time import sleep
 import uuid
 import six
+import string
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -303,6 +304,57 @@ class DVSController(object):
                         if not value.inherited is None:
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
+
+    def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
+        vim = self.connection.vim
+
+        traversal_spec = vim_util.build_traversal_spec(
+                vim.client.factory,
+                "dvs_to_dvpg",
+                "DistributedVirtualSwitch",
+                "portgroup",
+                False,
+                [])
+        object_spec = vim_util.build_object_spec(
+                vim.client.factory,
+                self._dvs,
+                [traversal_spec])
+        property_spec = vim_util.build_property_spec(
+                vim.client.factory,
+                "DistributedVirtualPortgroup",
+                ["key", "customValue"])
+
+        property_filter_spec = vim_util.build_property_filter_spec(
+                vim.client.factory,
+                [property_spec],
+                [object_spec])
+        options = vim.client.factory.create('ns0:RetrieveOptions')
+        options.maxObjects = max_objects
+
+        pc_result = vim.RetrievePropertiesEx(
+                vim.service_content.propertyCollector,
+                specSet=[property_filter_spec],
+                options=options)
+        result = {}
+
+        while True:
+            for objContent in pc_result.objects:
+                props = {prop.name : prop.val for prop in objContent.propSet}
+                if getSimpleTypeName(props["customValue"]) == "ArrayOfCustomFieldValue":
+                    LOG.debug("customValue is: %s", props["customValue"])
+                    for custom_field_value in props["customValue"]["CustomFieldValue"]:
+                        LOG.debug("custom_field_value is %s", custom_field_value)
+                        if custom_field_value.key == sg_attr_key:
+                            result[custom_field_value.value] = props["key"]
+                            break
+
+            if getattr(pc_result, 'token', None):
+                pc_result = vim.ContinueRetrievePropertiesEx(
+                        vim.service_content.propertyCollector, pc_result.token)
+            else:
+                break
+
+        return result
 
     def switch_port_blocked_state(self, port):
         try:
@@ -691,3 +743,10 @@ def wrap_retry(func):
                 else:
                     raise
     return wrapper
+
+
+def getSimpleTypeName(obj):
+    """
+    Returns Z for a type's name in the form of x.y.Z
+    """
+    return string.split(str(type(obj))[7:-2], ".")[-1]
