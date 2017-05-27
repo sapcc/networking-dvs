@@ -16,6 +16,9 @@
 import abc
 import copy
 import six
+import string
+
+from collections import defaultdict
 
 from oslo_log import log
 
@@ -355,3 +358,16 @@ def _patch_sg_rules(security_group_rules):
             patched_rules.append(rule)
 
     return patched_rules
+
+def _get_rules_per_sg_sets_from_port(ports):
+    """
+    Returns a dict mapping the available security group sets from the given ports
+    to all of their security group rules.
+
+    A security group set is a comma-separated, sorted list of security group ids
+    """
+    result = defaultdict(list)
+    for port in ports:
+        sg_set = string.join(sorted(port['security_groups']), ",")
+        result[sg_set].extend(port['security_group_rules'])
+    return result
