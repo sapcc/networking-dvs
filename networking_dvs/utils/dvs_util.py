@@ -14,9 +14,11 @@
 #    under the License.
 
 from time import sleep
+import hashlib
 import uuid
 import six
 import string
+import time
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -47,6 +49,7 @@ class DVSController(object):
         self._update_spec_queue = []
         self.ports_by_key = {}
         self._blocked_ports = set()
+        self._service_content = connection.vim.retrieve_service_content()
         self.builder = spec_builder.SpecBuilder(
             self.connection.vim.client.factory)
         try:
@@ -341,9 +344,7 @@ class DVSController(object):
             for objContent in pc_result.objects:
                 props = {prop.name : prop.val for prop in objContent.propSet}
                 if getSimpleTypeName(props["customValue"]) == "ArrayOfCustomFieldValue":
-                    LOG.debug("customValue is: %s", props["customValue"])
                     for custom_field_value in props["customValue"]["CustomFieldValue"]:
-                        LOG.debug("custom_field_value is %s", custom_field_value)
                         if custom_field_value.key == sg_attr_key:
                             result[custom_field_value.value] = props["key"]
                             break
@@ -355,6 +356,48 @@ class DVSController(object):
                 break
 
         return result
+
+    def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
+        """
+        Creates an automatically-named dvportgroup on the dvswitch
+        with the specified sg rules and marks it as such through a custom attribute
+        """
+        # There is a create_network method a few lines above
+        # which seems to be part of a non-used call path
+        # starting from the dvs_agent_rpc_api. TODO - remove it
+
+        # There is an upper limit on managed object names in vCenter
+        # so we use a hash of the security group set with a timestamp
+        name = hashlib.sha256(sg_set).hexdigest() + '-' + str(int(time.time()))
+
+        try:
+            pg_spec = self.builder.pg_config(port_config)
+            pg_spec.name = name
+            pg_spec.numPorts = 0
+            pg_spec.type = 'earlyBinding'
+            pg_spec.description = sg_set
+
+            pg_create_task = self.connection.invoke_api(
+                self.connection.vim,
+                'CreateDVPortgroup_Task',
+                self._dvs, spec=pg_spec)
+
+            result = self.connection.wait_for_task(pg_create_task)
+
+            pg_ref = result.result
+
+            self.connection.invoke_api(
+                self.connection.vim,
+                "SetField",
+                self._service_content.customFieldsManager,
+                entity=pg_ref,
+                key=sg_attr_key,
+                value=sg_set)
+
+            return vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])
+        except vmware_exceptions.VimException as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
+
 
     def switch_port_blocked_state(self, port):
         try:
