@@ -325,7 +325,7 @@ class DVSController(object):
         property_spec = vim_util.build_property_spec(
                 vim.client.factory,
                 "DistributedVirtualPortgroup",
-                ["key", "customValue"])
+                ["key", "config", "customValue"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
                 vim.client.factory,
@@ -346,7 +346,11 @@ class DVSController(object):
                 if getSimpleTypeName(props["customValue"]) == "ArrayOfCustomFieldValue":
                     for custom_field_value in props["customValue"]["CustomFieldValue"]:
                         if custom_field_value.key == sg_attr_key:
-                            result[custom_field_value.value] = {"key": props["key"], "ref": objContent.obj}
+                            result[custom_field_value.value] = {
+                                "key": props["key"],
+                                "ref": objContent.obj,
+                                "configVersion": props["config"].configVersion
+                            }
                             break
 
             if getattr(pc_result, 'token', None):
@@ -407,6 +411,18 @@ class DVSController(object):
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
+    def update_dvportgroup(self, pg_ref, config_version, port_config):
+        try:
+            pg_spec = self.builder.pg_config(port_config)
+            pg_spec.configVersion = config_version
+            pg_update_task = self.connection.invoke_api(
+                self.connection.vim,
+                'ReconfigureDVPortgroup_Task',
+                pg_ref, spec=pg_spec)
+
+            self.connection.wait_for_task(pg_update_task)
+        except vmware_exceptions.VimException as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
 
     def switch_port_blocked_state(self, port):
         try:

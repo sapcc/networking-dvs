@@ -132,14 +132,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             sg_sets_to_create = sg_sets.difference(existing_sg_sets)
 
             # apply port rules for existing dvportgroups matched to security groups
-
+            for sg_set in existing_sg_sets:
+                dvs.update_dvportgroup(pg_per_sg[sg_set]["ref"],
+                                       pg_per_sg[sg_set]["configVersion"],
+                                       port_rules_per_sg_sets[sg_set])
 
             # create dvportgroups for non-existing security group sets and apply port rules
             for sg_set in sg_sets_to_create:
                 pg = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
                                             sg_set, port_rules_per_sg_sets[sg_set])
                 pg_per_sg[sg_set] = pg
-
 
             # reassign vms if they are not in the correct dvportgroup according to their security groups
             # Q: how to prevent loops ? (as the dvs agent will see a new port comming up..)
