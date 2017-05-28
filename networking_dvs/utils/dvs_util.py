@@ -346,7 +346,7 @@ class DVSController(object):
                 if getSimpleTypeName(props["customValue"]) == "ArrayOfCustomFieldValue":
                     for custom_field_value in props["customValue"]["CustomFieldValue"]:
                         if custom_field_value.key == sg_attr_key:
-                            result[custom_field_value.value] = props["key"]
+                            result[custom_field_value.value] = {"key": props["key"], "ref": objContent.obj}
                             break
 
             if getattr(pc_result, 'token', None):
@@ -361,6 +361,14 @@ class DVSController(object):
         """
         Creates an automatically-named dvportgroup on the dvswitch
         with the specified sg rules and marks it as such through a custom attribute
+
+        Returns a dictionary with "key" and "ref" keys.
+
+        Note, that while a portgroup's key and managed object id have
+        the same string format and appear identical under normal use
+        it is possible to have them diverge by the use of the backup
+        and restore feature of the dvs for example.
+        As such, one should not rely on any equivalence between them.
         """
         # There is a create_network method a few lines above
         # which seems to be part of a non-used call path
@@ -394,7 +402,8 @@ class DVSController(object):
                 key=sg_attr_key,
                 value=sg_set)
 
-            return vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
+            key = vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
+            return {"key": key, "ref": pg_ref}
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 

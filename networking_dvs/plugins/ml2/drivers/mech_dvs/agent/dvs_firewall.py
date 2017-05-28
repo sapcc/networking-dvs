@@ -136,9 +136,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             # create dvportgroups for non-existing security group sets and apply port rules
             for sg_set in sg_sets_to_create:
-                pg_key = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
+                pg = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
                                             sg_set, port_rules_per_sg_sets[sg_set])
-                pg_per_sg[sg_set] = pg_key
+                pg_per_sg[sg_set] = pg
 
 
             # reassign vms if they are not in the correct dvportgroup according to their security groups
