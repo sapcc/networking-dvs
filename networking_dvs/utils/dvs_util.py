@@ -325,7 +325,7 @@ class DVSController(object):
         property_spec = vim_util.build_property_spec(
                 vim.client.factory,
                 "DistributedVirtualPortgroup",
-                ["key", "config", "customValue"])
+                ["key", "name", "config", "customValue", "vm"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
                 vim.client.factory,
@@ -349,7 +349,9 @@ class DVSController(object):
                             result[custom_field_value.value] = {
                                 "key": props["key"],
                                 "ref": objContent.obj,
-                                "configVersion": props["config"].configVersion
+                                "configVersion": props["config"].configVersion,
+                                "name": props["name"],
+                                "vm": props["vm"],
                             }
                             break
 
@@ -411,7 +413,11 @@ class DVSController(object):
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
-    def update_dvportgroup(self, pg_ref, config_version, port_config):
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None):
+        if not port_config:
+            port_config = self.builder.port_setting()
+            port_config.blocked = self.builder.blocked(False)
+            port_config.filterPolicy = self.builder.filter_policy([], None)
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version

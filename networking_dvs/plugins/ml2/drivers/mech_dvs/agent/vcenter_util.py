@@ -493,7 +493,7 @@ class VCenter(object):
         for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.uuid_dvs_map[dvs.uuid] = dvs
 
-    def setup_security_groups_support(self):
+    def setup_security_groups_support(self, reset_state=True):
         """
         We will track security groups -> dvportgroup mapping though the use
         of custom attributes.
@@ -520,6 +520,16 @@ class VCenter(object):
                                                moType="DistributedVirtualPortgroup")
             LOG.debug("Created custom attribute for security groups with key %s", field.key)
             self.security_groups_attribute_key = field.key
+
+        if reset_state:
+            # Will drop all security group rules from matching dvportgroups and remove empty portgroups
+            for uuid, dvs in six.iteritems(self.uuid_dvs_map):
+                sg_tagged_pgs = dvs.get_pg_per_sg_attribute(self.security_groups_attribute_key)
+                for sg_set, pg in six.iteritems(sg_tagged_pgs):
+                    if len(pg["vm"]) == 0:
+                        dvs._delete_port_group(pg["ref"], pg["name"])
+                    else:
+                        dvs.update_dvportgroup(pg["ref"], pg["configVersion"], None)
 
     @staticmethod
     def update_port_desc(port, port_info):
