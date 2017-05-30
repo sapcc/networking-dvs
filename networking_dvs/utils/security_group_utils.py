@@ -357,20 +357,53 @@ def _patch_sg_rules(security_group_rules):
 
     return patched_rules
 
-def get_port_config_per_sg_sets(client_factory, ports):
+def security_group_set(port):
     """
-    Returns a dict mapping the available security group sets from the given ports
-    to a port config that contains a unification of their security groups' rules.
+    Returns the security group set for a port.
 
-    A security group set is a comma-separated, sorted list of security group ids
+    A security group set is a comma-separated,
+    sorted list of security group ids
     """
-    sg_rules_per_sg_sets = defaultdict(list)
-    for port in ports:
-        sg_set = string.join(sorted(port['security_groups']), ",")
-        sg_rules_per_sg_sets[sg_set].extend(port['security_group_rules'])
+    return string.join(sorted(port['security_groups']), ",")
 
-    builder = PortConfigSpecBuilder(client_factory)
-    port_rules_per_sg_sets = {sg_set : port_configuration(builder, None, sg_rules, {}, None, None).setting
-                              for sg_set, sg_rules in sg_rules_per_sg_sets.iteritems()}
+def apply_rules(rules, sg_aggr, decrement=False):
+    """
+    Apply a set of security group rules to a security group aggregate structure
+    {
+        "rules": { "rulehash": (rule, count) }
+        "dirty": True|False
+    """
 
-    return port_rules_per_sg_sets
+    if "rules" in sg_aggr:
+        sg_aggr_rules = sg_aggr["rules"]
+    else:
+        sg_aggr_rules = {}
+        sg_aggr["rules"] = sg_aggr_rules
+
+    if not "dirty" in sg_aggr:
+        sg_aggr["dirty"] = False
+
+    for rule in rules:
+        comparable_rule = tuple(sorted(six.iteritems(rule)))
+        if comparable_rule in sg_aggr_rules:
+            rule, count = sg_aggr_rules[comparable_rule]
+            if decrement:
+                count -= 1
+                if count == 0:
+                    del sg_aggr_rules[comparable_rule]
+                    sg_aggr["dirty"] = True
+                    continue
+            # else
+            count += 1
+            sg_aggr_rules[comparable_rule] = (rule, count)
+        else:
+            sg_aggr_rules[comparable_rule] = (rule, 1)
+            sg_aggr["dirty"] = True
+
+def get_rules(sg_aggr):
+    """
+    Returns a list of the rules stored in a security group aggregate
+    """
+    return [x[0] for x in sg_aggr["rules"].values()]
+
+#
