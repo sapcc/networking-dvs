@@ -202,10 +202,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
                 dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
 
-                # Store obsolete port keys of reassigned VMs
+                # Store old port keys of reassigned VMs
                 port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
 
         # Remove obsolete port binding specs
+        """
+        This should be fixed in the design instead of adding corrective code!
+        Still, it is a cheap fix and saves unnecessary API calls.
+        """
         for dvs_uuid, port_keys in six.iteritems(port_keys_to_drop):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             dvs.filter_update_specs(lambda x : x.key not in port_keys)
