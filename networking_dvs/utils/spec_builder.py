@@ -23,13 +23,16 @@ class SpecBuilder(object):
     def pg_config(self, default_port_config):
         spec = self.factory.create('ns0:DVPortgroupConfigSpec')
         spec.defaultPortConfig = default_port_config
-        policy = self.factory.create('ns0:DVPortgroupPolicy')
+        policy = self.factory.create('ns0:VMwareDVSPortgroupPolicy')
         policy.blockOverrideAllowed = '1'
         policy.livePortMovingAllowed = '0'
         policy.portConfigResetAtDisconnect = '1'
         policy.shapingOverrideAllowed = '0'
         policy.trafficFilterOverrideAllowed = '1'
         policy.vendorConfigOverrideAllowed = '0'
+        policy.vlanOverrideAllowed = '1'
+        policy.uplinkTeamingOverrideAllowed = '0'
+        policy.securityPolicyOverrideAllowed = '0'
         spec.policy = policy
         return spec
 
