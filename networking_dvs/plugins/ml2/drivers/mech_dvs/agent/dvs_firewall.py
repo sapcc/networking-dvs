@@ -7,6 +7,7 @@ from neutron.agent import firewall
 from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
 from oslo_utils.timeutils import utcnow
+from oslo_vmware import vim_util
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 from networking_dvs.common.util import dict_merge, stats
@@ -26,21 +27,22 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def prepare_port_filter(self, ports):
         LOG.info("prepare_port_filter called with %s", pprint.pformat(ports))
-
-        merged_ports = self._merge_port_info_from_vcenter(ports)
-        self._update_ports_by_device_id(merged_ports)
-
-        self._process_ports(merged_ports, add=True, remove=False)
-        self._apply_changed_sg_attr()
+        self._add_port_filter(ports)
 
     def apply_port_filter(self, ports):
         LOG.info("apply_port_filter called with %s", pprint.pformat(ports))
+        self._add_port_filter(ports)
 
+    def _add_port_filter(self, ports):
+        """
+        Handler for both prepare and apply call paths
+        """
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
 
         self._process_ports(merged_ports, add=True, remove=False)
         self._apply_changed_sg_attr()
+        self._reassign_ports(merged_ports)
 
     def update_port_filter(self, ports):
         LOG.info("update_port_filter called with %s", pprint.pformat(ports))
@@ -52,6 +54,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         self._process_ports(merged_ports, add=True, remove=False)
         self._apply_changed_sg_attr()
+        self._reassign_ports(merged_ports)
 
     def remove_port_filter(self, port_ids):
         LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
@@ -154,11 +157,52 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                                                 sg_set, port_config)
                     # no need to update pg, e.g. pg_per_sg[sg_set] = pg
 
+                sg_aggr["dvpg-key"] = pg["key"]
                 sg_aggr["dirty"] = False
-            """
-            # reassign vms if they are not in the correct dvportgroup according to their security groups
-            # Q: how to prevent loops ? (as the dvs agent will see a new port comming up..)
-            """
+
+    def _reassign_ports(self, ports):
+        """
+        Reassigns VM to a dvportgroup based on its port's security group set
+        """
+        for port in ports:
+            port_desc = port['port_desc']
+            dvs_uuid = port_desc.dvs_uuid
+            sg_set = sg_util.security_group_set(port)
+            sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
+
+            # check whether VM needs to be reassigned to match its security group set
+            if port_desc.port_group_key != sg_aggr['dvpg-key']:
+                LOG.debug("port is %s", pprint.pformat(port))
+                dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+                client_factory = dvs.connection.vim.client.factory
+
+                # Configure the backing to the required dvportgroup
+                port_connection = client_factory.create('ns0:DistributedVirtualSwitchPortConnection')
+                port_connection.switchUuid = dvs_uuid
+                port_connection.portgroupKey = sg_aggr['dvpg-key']
+                port_backing = client_factory.create('ns0:VirtualEthernetCardDistributedVirtualPortBackingInfo')
+                port_backing.port = port_connection
+
+                # Specify the device that we are going to edit
+                virtual_device = client_factory.create('ns0:' + port_desc.device_type)
+                virtual_device.key = port_desc.device_key
+                virtual_device.backing = port_backing
+                virtual_device.addressType = "manual"
+                virtual_device.macAddress = port_desc.mac_address
+
+                # Create an edit spec for an existing virtual device
+                virtual_device_config_spec = client_factory.create('ns0:VirtualDeviceConfigSpec')
+                virtual_device_config_spec.operation = "edit"
+                virtual_device_config_spec.device = virtual_device
+
+                # Create a config spec for applying the update to the virtual machine
+                vm_config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+                vm_config_spec.deviceChange = [virtual_device_config_spec]
+
+                vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
+                # LOG.debug("vm_config_spec is %s", pprint.pformat(vm_config_spec))
+                dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
+                pass
 
 def ports_by_switch(now, ports=None):
     now = now or utcnow()
@@ -175,5 +219,6 @@ def ports_by_switch(now, ports=None):
         ports_by_switch[port_desc.dvs_uuid].append(port)
 
     return ports_by_switch
+
 
 #
