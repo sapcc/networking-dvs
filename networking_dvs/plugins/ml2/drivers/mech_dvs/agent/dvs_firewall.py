@@ -164,6 +164,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         """
         Reassigns VM to a dvportgroup based on its port's security group set
         """
+        port_keys_to_drop = defaultdict(list)
         for port in ports:
             port_desc = port['port_desc']
             dvs_uuid = port_desc.dvs_uuid
@@ -172,7 +173,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             # check whether VM needs to be reassigned to match its security group set
             if port_desc.port_group_key != sg_aggr['dvpg-key']:
-                LOG.debug("port is %s", pprint.pformat(port))
                 dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
                 client_factory = dvs.connection.vim.client.factory
 
@@ -200,9 +200,15 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 vm_config_spec.deviceChange = [virtual_device_config_spec]
 
                 vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
-                # LOG.debug("vm_config_spec is %s", pprint.pformat(vm_config_spec))
                 dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
-                pass
+
+                # Store obsolete port keys of reassigned VMs
+                port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
+
+        # Remove obsolete port binding specs
+        for dvs_uuid, port_keys in six.iteritems(port_keys_to_drop):
+            dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+            dvs.filter_update_specs(lambda x : x.key not in port_keys)
 
 def ports_by_switch(now, ports=None):
     now = now or utcnow()

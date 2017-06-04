@@ -180,6 +180,11 @@ class DVSController(object):
         self._update_spec_queue.append((update_specs, [callback]))
         stats.gauge('networking_dvs.update_spec_queue_length', len(self._update_spec_queue))
 
+    def filter_update_specs(self, filter_func):
+        self._update_spec_queue = [
+            (filter(filter_func, update_specs), callbacks)
+            for update_specs, callbacks in self._update_spec_queue]
+
     @staticmethod
     def _chunked_update_specs(specs, limit=500):
         specs = list(specs)
