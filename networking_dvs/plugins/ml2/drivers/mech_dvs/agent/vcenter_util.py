@@ -152,6 +152,7 @@ class _DVSPortDesc(object):
 class _DVSPortMonitorDesc(_DVSPortDesc):
     vmobref = attr.ib(convert=str, default=None)
     device_key = attr.ib(convert=int, default=None)
+    device_type = attr.ib(convert=str, default=None)
 
 
 class SpecBuilder(spec_builder.SpecBuilder):
@@ -392,6 +393,7 @@ class VCenterMonitor(object):
                             vmobref=vmobref,
                             device_key=v.key
                             ))
+                        port_desc.device_type = v.__class__.__name__
 
                         vm_hw[port_desc.device_key] = port_desc
                         self._handle_port_update(port_desc, now)
