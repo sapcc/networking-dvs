@@ -380,7 +380,7 @@ def apply_rules(rules, sg_aggr, decrement=False):
         sg_aggr_rules = {}
         sg_aggr["rules"] = sg_aggr_rules
 
-    if not "dirty" in sg_aggr:
+    if "dirty" not in sg_aggr:
         sg_aggr["dirty"] = False
 
     for rule in rules:
