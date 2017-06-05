@@ -370,7 +370,7 @@ def apply_rules(rules, sg_aggr, decrement=False):
     """
     Apply a set of security group rules to a security group aggregate structure
     {
-        "rules": { "rulehash": (rule, count) }
+        "rules": { "comparable_rule": count }
         "dirty": True|False
     """
 
@@ -386,7 +386,7 @@ def apply_rules(rules, sg_aggr, decrement=False):
     for rule in rules:
         comparable_rule = tuple(sorted(six.iteritems(rule)))
         if comparable_rule in sg_aggr_rules:
-            rule, count = sg_aggr_rules[comparable_rule]
+            count = sg_aggr_rules[comparable_rule]
             if decrement:
                 count -= 1
                 if count == 0:
@@ -395,15 +395,15 @@ def apply_rules(rules, sg_aggr, decrement=False):
                     continue
             else:
                 count += 1
-            sg_aggr_rules[comparable_rule] = (rule, count)
+            sg_aggr_rules[comparable_rule] = count
         else:
-            sg_aggr_rules[comparable_rule] = (rule, 1)
+            sg_aggr_rules[comparable_rule] = 1
             sg_aggr["dirty"] = True
 
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
-    return [x[0] for x in sg_aggr["rules"].values()]
+    return [{t[0]: t[1] for t in x} for x in sg_aggr["rules"].keys()]
 
 #
