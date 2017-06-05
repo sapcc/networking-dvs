@@ -297,10 +297,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
                 self.unbound_ports.pop(port_id, None)
-            # Nothing really to do on the VCenter - we let the vcenter unplug - so all we need to do is
-            # trigger the firewall update and clear the deleted ports list
+            # Security group rules are how handled on a dvportgroup level and we don't
+            # want to race against ourselves so removal is done synchronously.
             if self.sg_agent:
-                self.pool.spawn(self.sg_agent.remove_devices_filter, deleted_ports)
+                self.sg_agent.remove_devices_filter(deleted_ports)
 
         # If the segmentation id, or the port status changed, it will land in the updated_ports
         updated_ports = self.updated_ports.copy()
