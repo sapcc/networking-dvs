@@ -6,7 +6,6 @@ from collections import defaultdict
 from neutron.agent import firewall
 from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
-from oslo_utils.timeutils import utcnow
 from oslo_vmware import vim_util
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
@@ -107,11 +106,12 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         """
         Process security group settings for port updates
         """
-        for dvs_uuid, port_list in six.iteritems(_patched_ports_by_switch(None, ports)):
+        for dvs_uuid, port_list in six.iteritems(_ports_by_switch(ports)):
             for port in port_list:
                 sg_set = sg_util.security_group_set(port)
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
-                sg_util.apply_rules(port['security_group_rules'], sg_aggr, decrement)
+                patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
+                sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     @dvs_util.wrap_retry
     def _apply_changed_sg_attr(self):
@@ -203,19 +203,12 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             dvs.filter_update_specs(lambda x : x.key not in port_keys)
 
-def _patched_ports_by_switch(now, ports=None):
-    now = now or utcnow()
+def _ports_by_switch(ports=None):
     ports_by_switch = defaultdict(list)
-
     for port in ports:
         if not port:
             continue
-
-        port = port.copy()
-        port_desc = port['port_desc']
-        port_desc.queued_since = port_desc.queued_since or now
-        port['security_group_rules'] = sg_util._patch_sg_rules(port['security_group_rules'])
-        ports_by_switch[port_desc.dvs_uuid].append(port)
+        ports_by_switch[port['port_desc'].dvs_uuid].append(port)
 
     return ports_by_switch
 

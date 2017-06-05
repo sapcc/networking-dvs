@@ -105,7 +105,6 @@ class _DVSPortDesc(object):
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
     connected_since = attr.ib(default=None)
-    queued_since = attr.ib(default=None)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
