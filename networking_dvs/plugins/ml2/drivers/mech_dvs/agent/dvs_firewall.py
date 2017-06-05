@@ -20,28 +20,20 @@ CONF = config.CONF
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
-        self._defer_apply = False
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(dict))
 
     def prepare_port_filter(self, ports):
         # LOG.debug("prepare_port_filter called with %s", pprint.pformat(ports))
-        self._add_port_filter(ports)
-
-    def apply_port_filter(self, ports):
-        # LOG.debug("apply_port_filter called with %s", pprint.pformat(ports))
-        self._add_port_filter(ports)
-
-    def _add_port_filter(self, ports):
-        """
-        Handler for both prepare and apply call paths
-        """
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
-
         self._process_ports(merged_ports)
         self._apply_changed_sg_attr()
         self._reassign_ports(merged_ports)
+
+    def apply_port_filter(self, ports):
+        # This driver does all of its processing during the prepare_port_filter call
+        pass
 
     def update_port_filter(self, ports):
         # LOG.debug("update_port_filter called with %s", pprint.pformat(ports))
@@ -60,17 +52,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         ports_to_remove = [self._ports_by_device_id[port_id] for port_id in port_ids]
         self._process_ports(ports_to_remove, decrement=True)
         self._apply_changed_sg_attr()
-        # -------------
         for port_id in port_ids:
             self._ports_by_device_id.pop(port_id, None)
 
     def filter_defer_apply_on(self):
-        LOG.info("Defer apply on filter")
-        self._defer_apply = True
+        pass
 
     def filter_defer_apply_off(self):
-        LOG.info("Defer apply off filter")
-        self._defer_apply = False
+        pass
 
     @property
     def ports(self):
