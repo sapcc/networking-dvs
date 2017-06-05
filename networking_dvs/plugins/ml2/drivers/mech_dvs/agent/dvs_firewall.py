@@ -26,11 +26,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(dict))
 
     def prepare_port_filter(self, ports):
-        LOG.info("prepare_port_filter called with %s", pprint.pformat(ports))
+        # LOG.debug("prepare_port_filter called with %s", pprint.pformat(ports))
         self._add_port_filter(ports)
 
     def apply_port_filter(self, ports):
-        LOG.info("apply_port_filter called with %s", pprint.pformat(ports))
+        # LOG.debug("apply_port_filter called with %s", pprint.pformat(ports))
         self._add_port_filter(ports)
 
     def _add_port_filter(self, ports):
@@ -40,26 +40,26 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
 
-        self._process_ports(merged_ports, add=True, remove=False)
+        self._process_ports(merged_ports)
         self._apply_changed_sg_attr()
         self._reassign_ports(merged_ports)
 
     def update_port_filter(self, ports):
-        LOG.info("update_port_filter called with %s", pprint.pformat(ports))
+        # LOG.debug("update_port_filter called with %s", pprint.pformat(ports))
         ports_to_remove = [self._ports_by_device_id[port['device']] for port in ports]
-        self._process_ports(ports_to_remove, add=False, remove=True)
+        self._process_ports(ports_to_remove, decrement=True)
 
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
 
-        self._process_ports(merged_ports, add=True, remove=False)
+        self._process_ports(merged_ports)
         self._apply_changed_sg_attr()
         self._reassign_ports(merged_ports)
 
     def remove_port_filter(self, port_ids):
-        LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
+        # LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
         ports_to_remove = [self._ports_by_device_id[port_id] for port_id in port_ids]
-        self._process_ports(ports_to_remove, add=False, remove=True)
+        self._process_ports(ports_to_remove, decrement=True)
         self._apply_changed_sg_attr()
         # -------------
         for port_id in port_ids:
@@ -92,7 +92,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port_id = port['id']
             vcenter_port = self.v_center.uuid_port_map.get(port_id, None)
             if vcenter_port:
-                # print("Found port  {}".format(port_id))
                 dict_merge(vcenter_port, port)
                 merged_ports.append(vcenter_port)
             else:
@@ -103,23 +102,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for port in ports:
             self._ports_by_device_id[port['device']] = port
 
-    def _process_ports(self, ports, add=False, remove=False):
+    def _process_ports(self, ports, decrement=False):
         ports = self._merge_port_info_from_vcenter(ports)
         """
         Process security group settings for port updates
         """
-        if not add and not remove:
-            LOG.error("Called with NO-OP parameters")
-            return
-
-        for dvs_uuid, port_list in six.iteritems(ports_by_switch(None, ports)):
+        for dvs_uuid, port_list in six.iteritems(_patched_ports_by_switch(None, ports)):
             for port in port_list:
                 sg_set = sg_util.security_group_set(port)
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
-                if remove:
-                    sg_util.apply_rules(port['security_group_rules'], sg_aggr, decrement=True)
-                if add:
-                    sg_util.apply_rules(port['security_group_rules'], sg_aggr, decrement=False)
+                sg_util.apply_rules(port['security_group_rules'], sg_aggr, decrement)
 
     @dvs_util.wrap_retry
     def _apply_changed_sg_attr(self):
@@ -128,19 +120,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             client_factory = dvs.connection.vim.client.factory
             builder = sg_util.PortConfigSpecBuilder(client_factory)
-
             pg_per_sg = dvs.get_pg_per_sg_attribute(self.v_center.security_groups_attribute_key)
 
             for sg_set, sg_aggr in six.iteritems(sg_aggregates):
+                # LOG.debug("sg_aggr is %s", pprint.pformat(sg_aggr))
                 if not sg_aggr["dirty"]:
                     continue
 
                 sg_set_rules = sg_util.get_rules(sg_aggr)
-                # build traffic rules from sg rules
-                # build a port config update spec
-                # port_config = ...
-
-                port_config = sg_util.port_configuration(builder, None, sg_set_rules, {}, None, None).setting
+                port_config = sg_util.port_configuration(
+                        builder, None, sg_set_rules, {}, None, None).setting
 
                 if sg_set in pg_per_sg:
                     pg = pg_per_sg[sg_set]
@@ -214,7 +203,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             dvs.filter_update_specs(lambda x : x.key not in port_keys)
 
-def ports_by_switch(now, ports=None):
+def _patched_ports_by_switch(now, ports=None):
     now = now or utcnow()
     ports_by_switch = defaultdict(list)
 
@@ -229,6 +218,5 @@ def ports_by_switch(now, ports=None):
         ports_by_switch[port_desc.dvs_uuid].append(port)
 
     return ports_by_switch
-
 
 #
