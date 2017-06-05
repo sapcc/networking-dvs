@@ -393,8 +393,8 @@ def apply_rules(rules, sg_aggr, decrement=False):
                     del sg_aggr_rules[comparable_rule]
                     sg_aggr["dirty"] = True
                     continue
-            # else
-            count += 1
+            else:
+                count += 1
             sg_aggr_rules[comparable_rule] = (rule, count)
         else:
             sg_aggr_rules[comparable_rule] = (rule, 1)
