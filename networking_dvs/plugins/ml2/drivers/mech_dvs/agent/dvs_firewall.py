@@ -111,6 +111,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             builder = sg_util.PortConfigSpecBuilder(client_factory)
             pg_per_sg = dvs.get_pg_per_sg_attribute(self.v_center.security_groups_attribute_key)
 
+            obsolete_sg_sets = []
             for sg_set, sg_aggr in six.iteritems(sg_aggregates):
                 # LOG.debug("sg_aggr is %s", pprint.pformat(sg_aggr))
                 if not sg_aggr["dirty"]:
@@ -128,6 +129,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     if len(sg_set_rules) == 0:
                         if len(pg["vm"]) == 0:
                             dvs._delete_port_group(pg["ref"], pg["name"])
+                            obsolete_sg_sets.append(sg_set)
+                            continue
                         else:
                             # Keep the dirty flag, so that we retry deleting it on the next run
                             sg_aggr["dirty"] = True
@@ -143,6 +146,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     # no need to update pg, e.g. pg_per_sg[sg_set] = pg
 
                 sg_aggr["dvpg-key"] = pg["key"]
+
+            # Release no-longer used sg_aggr objects
+            for obsolete_sg_set in obsolete_sg_sets:
+                del sg_aggregates[obsolete_sg_set]
 
     def _reassign_ports(self, ports):
         """
