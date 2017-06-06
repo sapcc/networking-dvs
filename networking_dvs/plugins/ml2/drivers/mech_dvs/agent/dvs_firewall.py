@@ -116,6 +116,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 if not sg_aggr["dirty"]:
                     continue
 
+                # Mark as processed, might be reset bellow
+                sg_aggr["dirty"] = False
+
                 sg_set_rules = sg_util.get_rules(sg_aggr)
                 port_config = sg_util.port_configuration(
                         builder, None, sg_set_rules, {}, None, None).setting
@@ -123,7 +126,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 if sg_set in pg_per_sg:
                     pg = pg_per_sg[sg_set]
                     if len(sg_set_rules) == 0:
-                        dvs._delete_port_group(pg["ref"], pg["name"])
+                        if len(pg["vm"]) == 0:
+                            dvs._delete_port_group(pg["ref"], pg["name"])
+                        else:
+                            # Keep the dirty flag, so that we retry deleting it on the next run
+                            sg_aggr["dirty"] = True
                     else:
                         # a tagged dvportgroup exists, update it
                         dvs.update_dvportgroup(pg["ref"],
@@ -136,7 +143,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     # no need to update pg, e.g. pg_per_sg[sg_set] = pg
 
                 sg_aggr["dvpg-key"] = pg["key"]
-                sg_aggr["dirty"] = False
 
     def _reassign_ports(self, ports):
         """
