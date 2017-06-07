@@ -348,7 +348,7 @@ class DVSController(object):
         while True:
             for objContent in pc_result.objects:
                 props = {prop.name : prop.val for prop in objContent.propSet}
-                if getSimpleTypeName(props["customValue"]) == "ArrayOfCustomFieldValue":
+                if props["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
                     for custom_field_value in props["customValue"]["CustomFieldValue"]:
                         if custom_field_value.key == sg_attr_key:
                             result[custom_field_value.value] = {
@@ -822,10 +822,3 @@ def wrap_retry(func):
                 else:
                     raise
     return wrapper
-
-
-def getSimpleTypeName(obj):
-    """
-    Returns Z for a type's name in the form of x.y.Z
-    """
-    return string.split(str(type(obj))[7:-2], ".")[-1]
