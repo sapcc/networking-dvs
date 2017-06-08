@@ -28,7 +28,7 @@ class SpecBuilder(object):
         policy.livePortMovingAllowed = '0'
         policy.portConfigResetAtDisconnect = '1'
         policy.shapingOverrideAllowed = '0'
-        policy.trafficFilterOverrideAllowed = '1'
+        policy.trafficFilterOverrideAllowed = '0'
         policy.vendorConfigOverrideAllowed = '0'
         policy.vlanOverrideAllowed = '1'
         policy.uplinkTeamingOverrideAllowed = '0'
