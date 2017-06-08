@@ -18,7 +18,6 @@ import hashlib
 import uuid
 import six
 import string
-import time
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -386,8 +385,13 @@ class DVSController(object):
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
         # There is an upper limit on managed object names in vCenter
-        # so we use a hash of the security group set with a timestamp
-        name = hashlib.sha256(sg_set).hexdigest() + '-' + str(int(time.time()))
+        name = self.dvs_name + "-" + sg_set
+        if len(name) > 80:
+            # so we use a hash of the security group set
+            hex = hashlib.sha224()
+            hex.update(self.dvs_name)
+            hex.update(sg_set)
+            name = self.dvs_name[:23] + "-" + hex.hexdigest()
 
         try:
             pg_spec = self.builder.pg_config(port_config)
