@@ -91,10 +91,15 @@ def get_cluster_ref_by_name(connection, cluster_name):
             return cluster.obj
 
 
-@attr.s(slots=True)
+_attr_args = {'cmp': True, 'hash': True}
+if attr.__version__ > '16':
+    _attr_args.update(slots=True)
+
+
+@attr.s(**_attr_args)
 class _DVSPortDesc(object):
-    dvs_uuid = attr.ib(convert=str)
-    port_key = attr.ib(convert=str)
+    dvs_uuid = attr.ib(convert=str, cmp=True)
+    port_key = attr.ib(convert=str, cmp=True)
     port_group_key = attr.ib(convert=str) # It is an int, but the WDSL defines it as a string
     mac_address = attr.ib(convert=str)
     connection_cookie = attr.ib(convert=str) # Same as with port_key, int which is represented as a string
@@ -147,7 +152,7 @@ class _DVSPortDesc(object):
         return values
 
 
-@attr.s(slots=True)
+@attr.s(**_attr_args)
 class _DVSPortMonitorDesc(_DVSPortDesc):
     vmobref = attr.ib(convert=str, default=None)
     device_key = attr.ib(convert=int, default=None)
