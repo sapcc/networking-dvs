@@ -14,8 +14,10 @@
 #    under the License.
 
 from time import sleep
+import hashlib
 import uuid
 import six
+import string
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -46,6 +48,7 @@ class DVSController(object):
         self._update_spec_queue = []
         self.ports_by_key = {}
         self._blocked_ports = set()
+        self._service_content = connection.vim.retrieve_service_content()
         self.builder = spec_builder.SpecBuilder(
             self.connection.vim.client.factory)
         try:
@@ -176,6 +179,11 @@ class DVSController(object):
         self._update_spec_queue.append((update_specs, [callback]))
         stats.gauge('networking_dvs.update_spec_queue_length', len(self._update_spec_queue))
 
+    def filter_update_specs(self, filter_func):
+        self._update_spec_queue = [
+            (filter(filter_func, update_specs), callbacks)
+            for update_specs, callbacks in self._update_spec_queue]
+
     @staticmethod
     def _chunked_update_specs(specs, limit=500):
         specs = list(specs)
@@ -303,6 +311,133 @@ class DVSController(object):
                         if not value.inherited is None:
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
+
+    def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
+        vim = self.connection.vim
+
+        traversal_spec = vim_util.build_traversal_spec(
+                vim.client.factory,
+                "dvs_to_dvpg",
+                "DistributedVirtualSwitch",
+                "portgroup",
+                False,
+                [])
+        object_spec = vim_util.build_object_spec(
+                vim.client.factory,
+                self._dvs,
+                [traversal_spec])
+        property_spec = vim_util.build_property_spec(
+                vim.client.factory,
+                "DistributedVirtualPortgroup",
+                ["key", "name", "config", "customValue", "vm"])
+
+        property_filter_spec = vim_util.build_property_filter_spec(
+                vim.client.factory,
+                [property_spec],
+                [object_spec])
+        options = vim.client.factory.create('ns0:RetrieveOptions')
+        options.maxObjects = max_objects
+
+        pc_result = vim.RetrievePropertiesEx(
+                vim.service_content.propertyCollector,
+                specSet=[property_filter_spec],
+                options=options)
+        result = {}
+
+        while True:
+            for objContent in pc_result.objects:
+                props = {prop.name : prop.val for prop in objContent.propSet}
+                if props["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
+                    for custom_field_value in props["customValue"]["CustomFieldValue"]:
+                        if custom_field_value.key == sg_attr_key:
+                            result[custom_field_value.value] = {
+                                "key": props["key"],
+                                "ref": objContent.obj,
+                                "configVersion": props["config"].configVersion,
+                                "name": props["name"],
+                                "vm": props["vm"],
+                            }
+                            break
+
+            if getattr(pc_result, 'token', None):
+                pc_result = vim.ContinueRetrievePropertiesEx(
+                        vim.service_content.propertyCollector, pc_result.token)
+            else:
+                break
+
+        return result
+
+    def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
+        """
+        Creates an automatically-named dvportgroup on the dvswitch
+        with the specified sg rules and marks it as such through a custom attribute
+
+        Returns a dictionary with "key" and "ref" keys.
+
+        Note, that while a portgroup's key and managed object id have
+        the same string format and appear identical under normal use
+        it is possible to have them diverge by the use of the backup
+        and restore feature of the dvs for example.
+        As such, one should not rely on any equivalence between them.
+        """
+        # There is a create_network method a few lines above
+        # which seems to be part of a non-used call path
+        # starting from the dvs_agent_rpc_api. TODO - remove it
+
+        # There is an upper limit on managed object names in vCenter
+        name = self.dvs_name + "-" + sg_set
+        if len(name) > 80:
+            # so we use a hash of the security group set
+            hex = hashlib.sha224()
+            hex.update(self.dvs_name)
+            hex.update(sg_set)
+            name = self.dvs_name[:23] + "-" + hex.hexdigest()
+
+        try:
+            pg_spec = self.builder.pg_config(port_config)
+            pg_spec.name = name
+            pg_spec.numPorts = 0
+            pg_spec.type = 'earlyBinding'
+            pg_spec.description = sg_set
+
+            pg_create_task = self.connection.invoke_api(
+                self.connection.vim,
+                'CreateDVPortgroup_Task',
+                self._dvs, spec=pg_spec)
+
+            result = self.connection.wait_for_task(pg_create_task)
+
+            pg_ref = result.result
+
+            self.connection.invoke_api(
+                self.connection.vim,
+                "SetField",
+                self._service_content.customFieldsManager,
+                entity=pg_ref,
+                key=sg_attr_key,
+                value=sg_set)
+
+            key = vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
+            return {"key": key, "ref": pg_ref}
+        except vmware_exceptions.VimException as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
+
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None):
+        if not port_config:
+            port_config = self.builder.port_setting()
+            port_config.blocked = self.builder.blocked(False)
+            port_config.filterPolicy = self.builder.filter_policy([], None)
+        try:
+            pg_spec = self.builder.pg_config(port_config)
+            pg_spec.configVersion = config_version
+            pg_update_task = self.connection.invoke_api(
+                self.connection.vim,
+                'ReconfigureDVPortgroup_Task',
+                pg_ref, spec=pg_spec)
+
+            self.connection.wait_for_task(pg_update_task)
+        except vmware_exceptions.VimException as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
 
     def switch_port_blocked_state(self, port):
         try:

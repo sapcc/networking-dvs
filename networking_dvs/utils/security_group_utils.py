@@ -16,13 +16,15 @@
 import abc
 import copy
 import six
+import string
+
+from collections import defaultdict
 
 from oslo_log import log
 
 from neutron.i18n import _LI
 
 from networking_dvs.common import constants as dvs_const, exceptions
-from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
@@ -239,15 +241,13 @@ def build_port_rules(builder, ports, hashed_rules = None):
     return port_config_list
 
 
-@dvs_util.wrap_retry
-def update_port_rules(dvs, ports, callback=None):
+def get_port_rules(client_factory, ports):
     if not ports:
         return
 
-    builder = PortConfigSpecBuilder(dvs.connection.vim.client.factory)
+    builder = PortConfigSpecBuilder(client_factory)
     hashed_rules = {}
-    port_config_list = build_port_rules(builder, ports, hashed_rules)
-    dvs.queue_update_specs(port_config_list, callback=callback)
+    return build_port_rules(builder, ports, hashed_rules)
 
 
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):
@@ -339,3 +339,71 @@ def _create_rule(builder, rule_info, ip=None, name=None):
             rule_info.get(
                 'source_port_range_max') or dvs_const.MAX_EPHEMERAL_PORT)
     return rule
+
+
+def _patch_sg_rules(security_group_rules):
+    patched_rules = []
+
+    for rule in security_group_rules:
+        if not 'protocol' in rule:
+            for proto in ['icmp', 'udp', 'tcp']:
+                new_rule = rule.copy()
+                new_rule.update(protocol=proto,
+                                port_range_min=0,
+                                port_range_max=65535)
+                patched_rules.append(new_rule)
+        else:
+            patched_rules.append(rule)
+
+    return patched_rules
+
+def security_group_set(port):
+    """
+    Returns the security group set for a port.
+
+    A security group set is a comma-separated,
+    sorted list of security group ids
+    """
+    return string.join(sorted(port['security_groups']), ",")
+
+def apply_rules(rules, sg_aggr, decrement=False):
+    """
+    Apply a set of security group rules to a security group aggregate structure
+    {
+        "rules": { "comparable_rule": count }
+        "dirty": True|False
+    """
+
+    if "rules" in sg_aggr:
+        sg_aggr_rules = sg_aggr["rules"]
+    else:
+        sg_aggr_rules = {}
+        sg_aggr["rules"] = sg_aggr_rules
+
+    if "dirty" not in sg_aggr:
+        sg_aggr["dirty"] = False
+
+    for rule in rules:
+        comparable_rule = tuple(sorted(six.iteritems(rule)))
+        if comparable_rule in sg_aggr_rules:
+            count = sg_aggr_rules[comparable_rule]
+            if decrement:
+                count -= 1
+                if count == 0:
+                    del sg_aggr_rules[comparable_rule]
+                    sg_aggr["dirty"] = True
+                    continue
+            else:
+                count += 1
+            sg_aggr_rules[comparable_rule] = count
+        else:
+            sg_aggr_rules[comparable_rule] = 1
+            sg_aggr["dirty"] = True
+
+def get_rules(sg_aggr):
+    """
+    Returns a list of the rules stored in a security group aggregate
+    """
+    return [{t[0]: t[1] for t in x} for x in sg_aggr["rules"].keys()]
+
+#
