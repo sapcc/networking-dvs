@@ -37,7 +37,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def update_port_filter(self, ports):
         # LOG.debug("update_port_filter called with %s", pprint.pformat(ports))
-        ports_to_remove = [self._ports_by_device_id[port['device']] for port in ports]
+        ports_to_remove = [self._ports_by_device_id[port['device']]
+                           for port in ports
+                           if port['device'] in self._ports_by_device_id]
         self._process_ports(ports_to_remove, decrement=True)
 
         merged_ports = self._merge_port_info_from_vcenter(ports)
@@ -49,7 +51,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def remove_port_filter(self, port_ids):
         # LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
-        ports_to_remove = [self._ports_by_device_id[port_id] for port_id in port_ids]
+        ports_to_remove = [self._ports_by_device_id[port_id]
+                           for port_id in port_ids
+                           if port_id in self._ports_by_device_id]
         self._process_ports(ports_to_remove, decrement=True)
         self._apply_changed_sg_attr()
         for port_id in port_ids:
