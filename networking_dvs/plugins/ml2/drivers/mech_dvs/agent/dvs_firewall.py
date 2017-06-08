@@ -6,6 +6,7 @@ from collections import defaultdict
 from neutron.agent import firewall
 from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
+from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
@@ -195,10 +196,12 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 vm_config_spec.deviceChange = [virtual_device_config_spec]
 
                 vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
-                dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
-
+                try:
+                    dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
+                    port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
+                except vmware_exceptions.VimException as e:
+                    LOG.error("Unable to reassign VM, exception is %s.", e)
                 # Store old port keys of reassigned VMs
-                port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
 
         # Remove obsolete port binding specs
         """
