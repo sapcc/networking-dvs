@@ -216,7 +216,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             missing = self._read_neutron_ports(ports_by_mac)
             update_ports_thread.wait()
             for mac in missing:
-                del ports_by_mac.pop(mac, None)
+                ports_by_mac.pop(mac, None)
 
             LOG.debug(_LI("Scan {} ports completed (Missing {})".format(len(ports_by_mac), missing)))
 
