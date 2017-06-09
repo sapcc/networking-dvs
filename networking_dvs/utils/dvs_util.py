@@ -385,13 +385,13 @@ class DVSController(object):
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
         # There is an upper limit on managed object names in vCenter
-        name = self.dvs_name + "-" + sg_set
+        name = sg_set + "-" + self.dvs_name
         if len(name) > 80:
             # so we use a hash of the security group set
             hex = hashlib.sha224()
             hex.update(self.dvs_name)
             hex.update(sg_set)
-            name = self.dvs_name[:23] + "-" + hex.hexdigest()
+            name = hex.hexdigest() + "-" + self.dvs_name[:23]
 
         try:
             pg_spec = self.builder.pg_config(port_config)
