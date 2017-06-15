@@ -200,7 +200,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
                     port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
                 except vmware_exceptions.VimException as e:
-                    LOG.error("Unable to reassign VM, exception is %s.", e)
+                    LOG.info("Unable to reassign VM, exception is %s.", e)
                 # Store old port keys of reassigned VMs
 
         # Remove obsolete port binding specs
