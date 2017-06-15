@@ -142,14 +142,17 @@ class DVSController(object):
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
 
-    def _delete_port_group(self, pg_ref, name):
+    def _delete_port_group(self, pg_ref, name, wait=True):
         while True:
             try:
                 pg_delete_task = self.connection.invoke_api(
                     self.connection.vim,
                     'Destroy_Task',
                     pg_ref)
-                self.connection.wait_for_task(pg_delete_task)
+                if wait:
+                    self.connection.wait_for_task(pg_delete_task)
+                else:
+                    return pg_delete_task
                 LOG.info(_LI('Network %(name)s deleted.') % {'name': name})
                 break
             except vmware_exceptions.VimException as e:
@@ -422,7 +425,7 @@ class DVSController(object):
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
-    def update_dvportgroup(self, pg_ref, config_version, port_config=None):
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None, wait=True):
         if not port_config:
             port_config = self.builder.port_setting()
             port_config.blocked = self.builder.blocked(False)
@@ -435,7 +438,10 @@ class DVSController(object):
                 'ReconfigureDVPortgroup_Task',
                 pg_ref, spec=pg_spec)
 
-            self.connection.wait_for_task(pg_update_task)
+            if wait:
+                self.connection.wait_for_task(pg_update_task)
+            else:
+                return pg_update_task
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 

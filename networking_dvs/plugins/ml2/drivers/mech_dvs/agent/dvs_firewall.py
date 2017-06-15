@@ -109,6 +109,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @dvs_util.wrap_retry
     def _apply_changed_sg_attr(self):
+        tasks = {} # task_ref: connection
         for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
 
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
@@ -133,7 +134,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     pg = pg_per_sg[sg_set]
                     if len(sg_set_rules) == 0:
                         if len(pg["vm"]) == 0:
-                            dvs._delete_port_group(pg["ref"], pg["name"])
+                            task = dvs._delete_port_group(pg["ref"], pg["name"], wait=False)
+                            tasks[task] = dvs.connection
                             obsolete_sg_sets.append(sg_set)
                             continue
                         else:
@@ -141,9 +143,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                             sg_aggr["dirty"] = True
                     else:
                         # a tagged dvportgroup exists, update it
-                        dvs.update_dvportgroup(pg["ref"],
-                                               pg["configVersion"],
-                                               port_config)
+                        task = dvs.update_dvportgroup(pg["ref"],
+                                                      pg["configVersion"],
+                                                      port_config,
+                                                      wait=False)
+                        tasks[task] = dvs.connection
                 else:
                     # create a new dvportgroup and tag it
                     pg = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
@@ -155,6 +159,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # Release no-longer used sg_aggr objects
             for obsolete_sg_set in obsolete_sg_sets:
                 del sg_aggregates[obsolete_sg_set]
+
+        # Wait all pending operations
+        for task, connection in six.iteritems(tasks):
+            connection.wait_for_task(task)
 
     def _reassign_ports(self, ports):
         """
