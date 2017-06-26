@@ -196,12 +196,13 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 vm_config_spec.deviceChange = [virtual_device_config_spec]
 
                 vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
-                try:
-                    dvs.connection.invoke_api(dvs.connection.vim, "ReconfigVM_Task", vm_ref, spec=vm_config_spec)
-                    port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
-                except vmware_exceptions.VimException as e:
-                    LOG.info("Unable to reassign VM, exception is %s.", e)
+                if self.v_center.pool:
+                    self.v_center.pool.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
+                else:
+                    LOG.debug("No pool configured on vCenter, updates will be performed synchronously.")
+                    reconfig_vm(dvs, vm_ref, vm_config_spec)
                 # Store old port keys of reassigned VMs
+                port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
 
         # Remove obsolete port binding specs
         """
@@ -211,6 +212,15 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for dvs_uuid, port_keys in six.iteritems(port_keys_to_drop):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             dvs.filter_update_specs(lambda x : x.key not in port_keys)
+
+def reconfig_vm(dvs, vm_ref, vm_config_spec):
+    try:
+        dvs.connection.invoke_api(dvs.connection.vim,
+                                  "ReconfigVM_Task",
+                                  vm_ref,
+                                  spec=vm_config_spec)
+    except vmware_exceptions.VimException as e:
+        LOG.info("Unable to reassign VM, exception is %s.", e)
 
 def _ports_by_switch(ports=None):
     ports_by_switch = defaultdict(list)
