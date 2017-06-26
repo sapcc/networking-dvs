@@ -36,6 +36,28 @@ LOG = log.getLogger(__name__)
 
 INIT_PG_PORTS_COUNT = 4
 
+def wrap_retry(func):
+    """
+    Retry operation on dvs when concurrent modification by another operation
+    was discovered
+    """
+    @six.wraps(func)
+    def wrapper(*args, **kwargs):
+        login_failures = 0
+        while True:
+            try:
+                return func(*args, **kwargs)
+            except (vmware_exceptions.VMwareDriverException,
+                    exceptions.VMWareDVSException) as e:
+                if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
+                    continue
+                elif (dvs_const.LOGIN_PROBLEM_TEXT in str(e) and
+                        login_failures < dvs_const.LOGIN_RETRIES - 1):
+                    login_failures += 1
+                    continue
+                else:
+                    raise
+    return wrapper
 
 class DVSController(object):
     """Controls one DVS."""
@@ -141,7 +163,7 @@ class DVSController(object):
                 except vmware_exceptions.VMwareDriverException as e:
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
-
+    @wrap_retry
     def _delete_port_group(self, pg_ref, name):
         while True:
             try:
@@ -367,6 +389,7 @@ class DVSController(object):
 
         return result
 
+    @wrap_retry
     def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
         """
         Creates an automatically-named dvportgroup on the dvswitch
@@ -422,6 +445,7 @@ class DVSController(object):
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
+    @wrap_retry
     def update_dvportgroup(self, pg_ref, config_version, port_config=None):
         if not port_config:
             port_config = self.builder.port_setting()
@@ -803,26 +827,3 @@ def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
     dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
     return dvs
 
-
-def wrap_retry(func):
-    """
-    Retry operation on dvs when concurrent modification by another operation
-    was discovered
-    """
-    @six.wraps(func)
-    def wrapper(*args, **kwargs):
-        login_failures = 0
-        while True:
-            try:
-                return func(*args, **kwargs)
-            except (vmware_exceptions.VMwareDriverException,
-                    exceptions.VMWareDVSException) as e:
-                if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
-                    continue
-                elif (dvs_const.LOGIN_PROBLEM_TEXT in str(e) and
-                        login_failures < dvs_const.LOGIN_RETRIES - 1):
-                    login_failures += 1
-                    continue
-                else:
-                    raise
-    return wrapper
