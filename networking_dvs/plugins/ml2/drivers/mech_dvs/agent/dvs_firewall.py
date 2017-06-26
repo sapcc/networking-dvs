@@ -29,7 +29,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
         self._process_ports(merged_ports)
-        self._apply_changed_sg_attr()
+        self._apply_changed_sg_aggr()
         self._reassign_ports(merged_ports)
 
     def apply_port_filter(self, ports):
@@ -47,7 +47,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._update_ports_by_device_id(merged_ports)
 
         self._process_ports(merged_ports)
-        self._apply_changed_sg_attr()
+        self._apply_changed_sg_aggr()
         self._reassign_ports(merged_ports)
 
     def remove_port_filter(self, port_ids):
@@ -56,7 +56,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                            for port_id in port_ids
                            if port_id in self._ports_by_device_id]
         self._process_ports(ports_to_remove, decrement=True)
-        self._apply_changed_sg_attr()
+        self._apply_changed_sg_aggr()
         for port_id in port_ids:
             self._ports_by_device_id.pop(port_id, None)
 
@@ -108,7 +108,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     @dvs_util.wrap_retry
-    def _apply_changed_sg_attr(self):
+    def _apply_changed_sg_aggr(self):
         for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
 
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
