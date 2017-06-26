@@ -1,4 +1,10 @@
 import pprint
+import os
+if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
+    import eventlet
+    eventlet.monkey_patch()
+
+from eventlet.greenpool import GreenPile
 
 import six
 from collections import defaultdict
@@ -109,6 +115,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @dvs_util.wrap_retry
     def _apply_changed_sg_aggr(self):
+        pile = None
+        if self.v_center.pool:
+            pile = GreenPile(self.v_center.pool)
+            # See https://github.com/eventlet/eventlet/issues/53
+            pile.spawn(noop)
         for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
 
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
@@ -133,7 +144,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     pg = pg_per_sg[sg_set]
                     if len(sg_set_rules) == 0:
                         if len(pg["vm"]) == 0:
-                            dvs._delete_port_group(pg["ref"], pg["name"])
+                            if pile:
+                                pile.spawn(
+                                    dvs._delete_port_group, pg["ref"], pg["name"])
+                            else:
+                                dvs._delete_port_group(pg["ref"], pg["name"])
                             obsolete_sg_sets.append(sg_set)
                             continue
                         else:
@@ -141,20 +156,40 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                             sg_aggr["dirty"] = True
                     else:
                         # a tagged dvportgroup exists, update it
-                        dvs.update_dvportgroup(pg["ref"],
-                                               pg["configVersion"],
-                                               port_config)
+                        if pile:
+                            pile.spawn(
+                                dvs.update_dvportgroup,
+                                pg["ref"],
+                                pg["configVersion"],
+                                port_config)
+                        else:
+                            dvs.update_dvportgroup(pg["ref"],
+                                                   pg["configVersion"],
+                                                   port_config)
+                    sg_aggr["dvpg-key"] = pg["key"]
                 else:
-                    # create a new dvportgroup and tag it
-                    pg = dvs.create_dvportgroup(self.v_center.security_groups_attribute_key,
-                                                sg_set, port_config)
-                    # no need to update pg, e.g. pg_per_sg[sg_set] = pg
-
-                sg_aggr["dvpg-key"] = pg["key"]
+                    if pile:
+                        pile.spawn(
+                            create_dvpg_and_update_sg_aggr,
+                            dvs,
+                            self.v_center.security_groups_attribute_key,
+                            sg_set,
+                            port_config,
+                            sg_aggr)
+                    else:
+                        create_dvpg_and_update_sg_aggr(dvs,
+                            self.v_center.security_groups_attribute_key, sg_set, port_config, sg_aggr)
 
             # Release no-longer used sg_aggr objects
             for obsolete_sg_set in obsolete_sg_sets:
                 del sg_aggregates[obsolete_sg_set]
+
+        if pile:
+            LOG.debug("Executing queued dvportgroup operations.")
+            opsCount = -1
+            for result in pile:
+                opsCount += 1
+            LOG.debug("Executed %d queued dvportgroup operations.", opsCount)
 
     def _reassign_ports(self, ports):
         """
@@ -213,6 +248,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             dvs.filter_update_specs(lambda x : x.key not in port_keys)
 
+def create_dvpg_and_update_sg_aggr(dvs, sg_attr_key, sg_set, port_config, sg_aggr):
+    pg = dvs.create_dvportgroup(sg_attr_key, sg_set, port_config)
+    sg_aggr["dvpg-key"] = pg["key"]
+
 def reconfig_vm(dvs, vm_ref, vm_config_spec):
     try:
         dvs.connection.invoke_api(dvs.connection.vim,
@@ -231,4 +270,6 @@ def _ports_by_switch(ports=None):
 
     return ports_by_switch
 
+def noop():
+    pass
 #
