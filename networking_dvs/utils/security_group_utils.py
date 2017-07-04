@@ -381,7 +381,7 @@ def apply_rules(rules, sg_aggr, decrement=False):
         sg_aggr["rules"] = sg_aggr_rules
 
     if "dirty" not in sg_aggr:
-        sg_aggr["dirty"] = False
+        sg_aggr["dirty"] = True
 
     for rule in rules:
         comparable_rule = tuple(sorted(six.iteritems(rule)))
