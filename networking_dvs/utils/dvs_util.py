@@ -164,6 +164,7 @@ class DVSController(object):
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
     @wrap_retry
+    @stats.timed()
     def _delete_port_group(self, pg_ref, name):
         while True:
             try:
@@ -334,6 +335,7 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
+    @stats.timed()
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
         vim = self.connection.vim
 
@@ -390,6 +392,7 @@ class DVSController(object):
         return result
 
     @wrap_retry
+    @stats.timed()
     def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
         """
         Creates an automatically-named dvportgroup on the dvswitch
@@ -446,6 +449,7 @@ class DVSController(object):
             raise exceptions.wrap_wmvare_vim_exception(e)
 
     @wrap_retry
+    @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None):
         if not port_config:
             port_config = self.builder.port_setting()

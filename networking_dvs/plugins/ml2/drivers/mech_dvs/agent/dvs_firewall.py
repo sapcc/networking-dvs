@@ -114,6 +114,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     @dvs_util.wrap_retry
+    @stats.timed()
     def _apply_changed_sg_aggr(self):
         if self.v_center.pool:
             pile = GreenPile(self.v_center.pool)
@@ -243,6 +244,7 @@ def create_dvpg_and_update_sg_aggr(dvs, sg_attr_key, sg_set, port_config, sg_agg
     pg = dvs.create_dvportgroup(sg_attr_key, sg_set, port_config)
     sg_aggr["dvpg-key"] = pg["key"]
 
+@stats.timed()
 def reconfig_vm(dvs, vm_ref, vm_config_spec):
     try:
         dvs.connection.invoke_api(dvs.connection.vim,
