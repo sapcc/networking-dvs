@@ -353,7 +353,7 @@ class DVSController(object):
         property_spec = vim_util.build_property_spec(
                 vim.client.factory,
                 "DistributedVirtualPortgroup",
-                ["key", "name", "config", "customValue", "vm"])
+                ["key", "name", "config.configVersion", "customValue", "vm"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
                 vim.client.factory,
@@ -377,7 +377,7 @@ class DVSController(object):
                             result[custom_field_value.value] = {
                                 "key": props["key"],
                                 "ref": objContent.obj,
-                                "configVersion": props["config"].configVersion,
+                                "configVersion": props["config.configVersion"],
                                 "name": props["name"],
                                 "vm": props["vm"],
                             }
