@@ -29,6 +29,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(dict))
+        self._green = self.v_center.pool or eventlet
+        self._pile = _pile(self.v_center.pool)
 
     def prepare_port_filter(self, ports):
         # LOG.debug("prepare_port_filter called with %s", pprint.pformat(ports))
@@ -116,13 +118,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     @dvs_util.wrap_retry
     @stats.timed()
     def _apply_changed_sg_aggr(self):
-        if self.v_center.pool:
-            pile = GreenPile(self.v_center.pool)
-        else:
-            pile = GreenPile()
 
-        # See https://github.com/eventlet/eventlet/issues/53
-        pile.spawn(noop)
+        local_pile = _pile(self.v_center.pool)
+        local_pile.spawn(noop) # See https://github.com/eventlet/eventlet/issues/53
+
+        # Wait any update tasks from the previous run before proceeding
+        self._pile.spawn(noop)
+        for result in self._pile:
+            pass
 
         for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
 
@@ -130,8 +133,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             client_factory = dvs.connection.vim.client.factory
             builder = sg_util.PortConfigSpecBuilder(client_factory)
             pg_per_sg = dvs.get_pg_per_sg_attribute(self.v_center.security_groups_attribute_key)
-
             obsolete_sg_sets = []
+
             for sg_set, sg_aggr in six.iteritems(sg_aggregates):
                 # LOG.debug("sg_aggr is %s", pprint.pformat(sg_aggr))
                 if not sg_aggr["dirty"]:
@@ -148,7 +151,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     pg = pg_per_sg[sg_set]
                     if len(sg_set_rules) == 0:
                         if len(pg["vm"]) == 0:
-                            pile.spawn(
+                            # Spawn it in the non-local pile
+                            self._pile.spawn(
                                 dvs._delete_port_group, pg["ref"], pg["name"])
                             obsolete_sg_sets.append(sg_set)
                             continue
@@ -156,15 +160,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                             # Keep the dirty flag, so that we retry deleting it on the next run
                             sg_aggr["dirty"] = True
                     else:
-                        # a tagged dvportgroup exists, update it
-                        pile.spawn(
+                        # A tagged dvportgroup exists, update it
+                        # Spawn it in the non-local pile
+                        self._pile.spawn(
                             dvs.update_dvportgroup,
                             pg["ref"],
                             pg["configVersion"],
                             port_config)
                     sg_aggr["dvpg-key"] = pg["key"]
                 else:
-                    pile.spawn(
+                    local_pile.spawn(
                         create_dvpg_and_update_sg_aggr,
                         dvs,
                         self.v_center.security_groups_attribute_key,
@@ -176,17 +181,16 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             for obsolete_sg_set in obsolete_sg_sets:
                 del sg_aggregates[obsolete_sg_set]
 
-        LOG.debug("Executing queued dvportgroup operations.")
-        opsCount = -1
-        for result in pile:
-            opsCount += 1
-        LOG.debug("Executed %d queued dvportgroup operations.", opsCount)
+        eventlet.sleep(0) # yield to allow DVPG updates to take place
+
+        # Wait new dvpg creations, necessary for vm reassignments
+        for result in local_pile:
+            pass
 
     def _reassign_ports(self, ports):
         """
         Reassigns VM to a dvportgroup based on its port's security group set
         """
-        green = self.v_center.pool or eventlet
         port_keys_to_drop = defaultdict(list)
         for port in ports:
             port_desc = port['port_desc']
@@ -224,7 +228,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
                 # Queue the update
                 vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
-                green.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
+                self._green.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
 
                 # Store old port keys of reassigned VMs
                 port_keys_to_drop[dvs_uuid].append(port_desc.port_key)
@@ -265,4 +269,10 @@ def _ports_by_switch(ports=None):
 
 def noop():
     pass
+
+def _pile(pool=None):
+    if pool:
+        return GreenPile(pool)
+    else:
+        return GreenPile()
 #
