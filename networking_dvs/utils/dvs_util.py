@@ -334,8 +334,10 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
+    @stats.timed()
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
         vim = self.connection.vim
+        property_collector = vim.service_content.propertyCollector
 
         traversal_spec = vim_util.build_traversal_spec(
                 vim.client.factory,
@@ -360,9 +362,7 @@ class DVSController(object):
         options = vim.client.factory.create('ns0:RetrieveOptions')
         options.maxObjects = max_objects
 
-        pc_result = vim.RetrievePropertiesEx(
-                vim.service_content.propertyCollector,
-                specSet=[property_filter_spec],
+        pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
                 options=options)
         result = {}
 
@@ -382,8 +382,7 @@ class DVSController(object):
                             break
 
             if getattr(pc_result, 'token', None):
-                pc_result = vim.ContinueRetrievePropertiesEx(
-                        vim.service_content.propertyCollector, pc_result.token)
+                pc_result = vim.ContinueRetrievePropertiesEx(property_collector, token=pc_result.token)
             else:
                 break
 
