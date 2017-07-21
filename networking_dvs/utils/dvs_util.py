@@ -164,7 +164,6 @@ class DVSController(object):
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
     @wrap_retry
-    @stats.timed()
     def _delete_port_group(self, pg_ref, name):
         while True:
             try:
@@ -335,7 +334,6 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
-    @stats.timed()
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
         vim = self.connection.vim
 
