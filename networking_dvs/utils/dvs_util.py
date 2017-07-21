@@ -339,7 +339,6 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
-    @stats.timed()
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
         vim = self.connection.vim
         property_collector = vim.service_content.propertyCollector
