@@ -16,6 +16,7 @@
 from time import sleep
 import hashlib
 import uuid
+import re
 import six
 import string
 
@@ -164,7 +165,8 @@ class DVSController(object):
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
     @wrap_retry
-    def _delete_port_group(self, pg_ref, name):
+    @stats.timed()
+    def _delete_port_group(self, pg_ref, name, ignore_in_use=False):
         while True:
             try:
                 pg_delete_task = self.connection.invoke_api(
@@ -175,7 +177,10 @@ class DVSController(object):
                 LOG.info(_LI('Network %(name)s deleted.') % {'name': name})
                 break
             except vmware_exceptions.VimException as e:
-                raise exceptions.wrap_wmvare_vim_exception(e)
+                if not ignore_in_use or not re.match("The resource '\d*' is in use.", e.message):
+                    raise exceptions.wrap_wmvare_vim_exception(e)
+                else:
+                    LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(messsage)s") % {'name': name, 'message': e.message})
             except vmware_exceptions.VMwareDriverException as e:
                 if dvs_const.DELETED_TEXT in e.message:
                     sleep(0.1)
