@@ -443,12 +443,12 @@ class DVSController(object):
         """
         # There is an upper limit on managed object names in vCenter
         dvs_id = ''.join(self.uuid.split(' '))[:8]
-        name = dvs_id + "-" + sg_set
+        name = sg_set + "-" + dvs_id
         if len(name) > 80:
             # so we use a hash of the security group set
             hex = hashlib.sha224()
             hex.update(sg_set)
-            name = dvs_id + "-" + hex.hexdigest()
+            name = hex.hexdigest() + "-" + dvs_id
 
         return name
 
