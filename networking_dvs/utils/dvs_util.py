@@ -407,18 +407,9 @@ class DVSController(object):
         # which seems to be part of a non-used call path
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
-        # There is an upper limit on managed object names in vCenter
-        name = sg_set + "-" + self.dvs_name
-        if len(name) > 80:
-            # so we use a hash of the security group set
-            hex = hashlib.sha224()
-            hex.update(self.dvs_name)
-            hex.update(sg_set)
-            name = hex.hexdigest() + "-" + self.dvs_name[:23]
-
         try:
             pg_spec = self.builder.pg_config(port_config)
-            pg_spec.name = name
+            pg_spec.name = self.dvportgroup_name(sg_set)
             pg_spec.numPorts = 0
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
@@ -445,9 +436,25 @@ class DVSController(object):
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
+    def dvportgroup_name(self, sg_set):
+        """
+        Returns a dvportgroup name for the particular security group set
+        in the context of the current switch
+        """
+        # There is an upper limit on managed object names in vCenter
+        dvs_id = ''.join(self.uuid.split(' '))[:8]
+        name = sg_set + "-" + dvs_id
+        if len(name) > 80:
+            # so we use a hash of the security group set
+            hex = hashlib.sha224()
+            hex.update(sg_set)
+            name = hex.hexdigest() + "-" + dvs_id
+
+        return name
+
     @wrap_retry
     @stats.timed()
-    def update_dvportgroup(self, pg_ref, config_version, port_config=None):
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
         if not port_config:
             port_config = self.builder.port_setting()
             port_config.blocked = self.builder.blocked(False)
@@ -455,6 +462,8 @@ class DVSController(object):
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
+            if name:
+                pg_spec.name = name
             pg_update_task = self.connection.invoke_api(
                 self.connection.vim,
                 'ReconfigureDVPortgroup_Task',
