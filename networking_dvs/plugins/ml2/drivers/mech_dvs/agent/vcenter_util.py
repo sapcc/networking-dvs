@@ -535,7 +535,10 @@ class VCenter(object):
                     if len(pg["vm"]) == 0:
                         dvs._delete_port_group(pg["ref"], pg["name"])
                     else:
-                        dvs.update_dvportgroup(pg["ref"], pg["configVersion"], None)
+                        dvs.update_dvportgroup(pg["ref"],
+                                               pg["configVersion"],
+                                               port_config=None,
+                                               name=dvs.dvportgroup_name(sg_set))
 
     @staticmethod
     def update_port_desc(port, port_info):

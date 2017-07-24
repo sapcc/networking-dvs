@@ -455,7 +455,7 @@ class DVSController(object):
 
     @wrap_retry
     @stats.timed()
-    def update_dvportgroup(self, pg_ref, config_version, port_config=None):
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
         if not port_config:
             port_config = self.builder.port_setting()
             port_config.blocked = self.builder.blocked(False)
@@ -463,6 +463,8 @@ class DVSController(object):
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
+            if name:
+                pg_spec.name = name
             pg_update_task = self.connection.invoke_api(
                 self.connection.vim,
                 'ReconfigureDVPortgroup_Task',
