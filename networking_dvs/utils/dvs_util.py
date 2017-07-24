@@ -447,7 +447,6 @@ class DVSController(object):
         if len(name) > 80:
             # so we use a hash of the security group set
             hex = hashlib.sha224()
-            hex.update(dvs_id)
             hex.update(sg_set)
             name = dvs_id + "-" + hex.hexdigest()
 
