@@ -153,7 +153,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                         if len(pg["vm"]) == 0:
                             # Spawn it in the non-local pile
                             self._pile.spawn(
-                                dvs._delete_port_group, pg["ref"], pg["name"])
+                                dvs._delete_port_group, pg["ref"], pg["name"], ignore_in_use=True)
                             obsolete_sg_sets.append(sg_set)
                             continue
                         else:
