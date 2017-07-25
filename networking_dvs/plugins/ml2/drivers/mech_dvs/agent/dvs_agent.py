@@ -337,9 +337,16 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         known_ids = six.viewkeys(self.known_ports)
         for port in found_ports:
             port_id = port.get("port_id", None)
-            if port_id and not port_id in known_ids:
+            if not port_id:
+                continue
+            if port_id not in known_ids:
                 added_ports.add(port_id)
                 self.known_ports[port_id] = port
+            else:
+                known_port = self.known_ports[port_id]
+                if port['port_desc'] != known_port['port_desc']:
+                    self.known_ports[port_id] = port
+                    updated_ports[port_id] = port
 
         for port in six.iterkeys(updated_ports):
             self.updated_ports.pop(port, None)

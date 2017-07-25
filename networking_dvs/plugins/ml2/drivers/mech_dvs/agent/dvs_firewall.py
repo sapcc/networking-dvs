@@ -1,4 +1,5 @@
 import pprint
+import copy
 import os
 import eventlet
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
@@ -91,7 +92,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = []
         for port in ports: # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
-            vcenter_port = self.v_center.uuid_port_map.get(port_id, None)
+            vcenter_port = copy.deepcopy(self.v_center.uuid_port_map.get(port_id, None))
             if vcenter_port:
                 dict_merge(vcenter_port, port)
                 merged_ports.append(vcenter_port)
@@ -104,7 +105,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             self._ports_by_device_id[port['device']] = port
 
     def _process_ports(self, ports, decrement=False):
-        ports = self._merge_port_info_from_vcenter(ports)
         """
         Process security group settings for port updates
         """
