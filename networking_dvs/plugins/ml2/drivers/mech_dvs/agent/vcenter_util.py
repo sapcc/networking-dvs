@@ -533,7 +533,7 @@ class VCenter(object):
                 sg_tagged_pgs = dvs.get_pg_per_sg_attribute(self.security_groups_attribute_key)
                 for sg_set, pg in six.iteritems(sg_tagged_pgs):
                     if len(pg["vm"]) == 0:
-                        dvs._delete_port_group(pg["ref"], pg["name"])
+                        dvs._delete_port_group(pg["ref"], pg["name"], ignore_in_use=True)
                     else:
                         dvs.update_dvportgroup(pg["ref"],
                                                pg["configVersion"],

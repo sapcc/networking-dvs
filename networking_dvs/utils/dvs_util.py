@@ -180,7 +180,9 @@ class DVSController(object):
                 if not ignore_in_use or not re.match("The resource '\d*' is in use.", e.message):
                     raise exceptions.wrap_wmvare_vim_exception(e)
                 else:
-                    LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(messsage)s") % {'name': name, 'message': e.message})
+                    LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
+                             % {'name': name, 'message': e.message})
+                    break
             except vmware_exceptions.VMwareDriverException as e:
                 if dvs_const.DELETED_TEXT in e.message:
                     sleep(0.1)
