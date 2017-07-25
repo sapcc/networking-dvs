@@ -104,7 +104,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             self._ports_by_device_id[port['device']] = port
 
     def _process_ports(self, ports, decrement=False):
-        ports = self._merge_port_info_from_vcenter(ports)
         """
         Process security group settings for port updates
         """
