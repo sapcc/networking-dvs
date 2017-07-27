@@ -387,6 +387,10 @@ class VCenterMonitor(object):
             elif change_name.startswith("config.hardware.device["):
                 id_end = change_name.index("]")
                 device_key = int(change_name[23:id_end])
+                if "remove" == change.op:
+                    vm_hw.pop(device_key, None)
+                    continue
+                # assume that change.op is assign
                 port_desc = vm_hw.get(device_key, None)
                 if port_desc:
                     attribute = change_name[id_end + 2:]
