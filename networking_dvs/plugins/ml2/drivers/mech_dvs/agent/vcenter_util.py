@@ -408,6 +408,11 @@ class VCenterMonitor(object):
                     elif "backing.port.portKey" == attribute:
                         port_desc.port_key = str(change.val)
                         self._handle_port_update(port_desc, now)
+                else:
+                    port_desc = self._port_desc_from_nic_change(vmobref, change.val)
+                    if port_desc:
+                        vm_hw[port_desc.device_key] = port_desc
+                        self._handle_port_update(port_desc, now)
 
             elif change_name == 'runtime.powerState':
                 # print("{}: {}".format(vm, change.val))
