@@ -378,34 +378,19 @@ class VCenterMonitor(object):
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
                     for v in change.val[0]:
-                        backing = getattr(v, 'backing', None)
-                        # If if is not a NIC, it will have no backing and/or port
-                        if not backing:
-                            continue
-                        port = getattr(backing, 'port', None)
-                        if not port:
-                            continue
-                        # port is a DistributedVirtualSwitchPortConnection
-
-                        connectable = getattr(v, 'connectable', None)
-
-                        port_desc = _DVSPortMonitorDesc(**_DVSPortDesc.from_dvs_port(
-                            port,
-                            mac_address=getattr(v, 'macAddress', None),
-                            connected=connectable.connected if connectable else None,
-                            status=connectable.status if connectable else None,
-                            vmobref=vmobref,
-                            device_key=v.key
-                            ))
-                        port_desc.device_type = v.__class__.__name__
-
-                        vm_hw[port_desc.device_key] = port_desc
-                        self._handle_port_update(port_desc, now)
+                        port_desc = self._port_desc_from_nic_change(vmobref, v)
+                        if port_desc:
+                            vm_hw[port_desc.device_key] = port_desc
+                            self._handle_port_update(port_desc, now)
                 elif "indirectRemove" == change.op:
                     self._handle_removal(vmobref)
             elif change_name.startswith("config.hardware.device["):
                 id_end = change_name.index("]")
                 device_key = int(change_name[23:id_end])
+                if "remove" == change.op:
+                    vm_hw.pop(device_key, None)
+                    continue
+                # assume that change.op is assign
                 port_desc = vm_hw.get(device_key, None)
                 if port_desc:
                     attribute = change_name[id_end + 2:]
@@ -423,6 +408,11 @@ class VCenterMonitor(object):
                     elif "backing.port.portKey" == attribute:
                         port_desc.port_key = str(change.val)
                         self._handle_port_update(port_desc, now)
+                else:
+                    port_desc = self._port_desc_from_nic_change(vmobref, change.val)
+                    if port_desc:
+                        vm_hw[port_desc.device_key] = port_desc
+                        self._handle_port_update(port_desc, now)
 
             elif change_name == 'runtime.powerState':
                 # print("{}: {}".format(vm, change.val))
@@ -438,6 +428,26 @@ class VCenterMonitor(object):
         else:
             pass
 
+    def _port_desc_from_nic_change(self, vmobref, value):
+        backing = getattr(value, 'backing', None)
+        # If if is not a NIC, it will have no backing and/or port
+        if not backing:
+            return
+        port = getattr(backing, 'port', None)
+        if not port:
+            return
+        # port is a DistributedVirtualSwitchPortConnection
+        connectable = getattr(value, 'connectable', None)
+        port_desc = _DVSPortMonitorDesc(**_DVSPortDesc.from_dvs_port(
+            port,
+            mac_address=getattr(value, 'macAddress', None),
+            connected=connectable.connected if connectable else None,
+            status=connectable.status if connectable else None,
+            vmobref=vmobref,
+            device_key=value.key
+            ))
+        port_desc.device_type = value.__class__.__name__
+        return port_desc
     def _handle_port_update(self, port_desc, now):
         mac_address = port_desc.mac_address
 
