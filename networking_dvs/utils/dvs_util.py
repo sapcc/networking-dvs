@@ -164,7 +164,6 @@ class DVSController(object):
                 except vmware_exceptions.VMwareDriverException as e:
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
-    @wrap_retry
     @stats.timed()
     def _delete_port_group(self, pg_ref, name, ignore_in_use=False):
         while True:
@@ -394,7 +393,6 @@ class DVSController(object):
 
         return result
 
-    @wrap_retry
     @stats.timed()
     def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
         """
@@ -458,7 +456,6 @@ class DVSController(object):
 
         return name
 
-    @wrap_retry
     @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
         if not port_config:
