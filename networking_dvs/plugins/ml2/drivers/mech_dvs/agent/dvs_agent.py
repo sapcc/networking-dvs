@@ -313,12 +313,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         for port in found_ports:
             port_segmentation_id = port.get('segmentation_id', None)
             port_network_type = port.get('network_type', None)
-            port_vlan_id = port['port_desc'].vlan_id
             if port.get('port_id', None) \
-                    and ((port_segmentation_id \
-                            and port_network_type == 'vlan' \
-                            and (port_segmentation_id != port_vlan_id)) \
-                         or port_network_type == 'flat'):
+                    and ((port_segmentation_id and port_network_type == 'vlan') \
+                            or port_network_type == 'flat'):
                 ports_to_bind.append(port)
             else:
                 # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
