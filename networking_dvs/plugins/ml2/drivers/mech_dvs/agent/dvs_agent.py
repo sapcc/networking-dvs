@@ -309,21 +309,33 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         found_ports = self._scan_ports()
 
         ports_to_bind = list(self.api.uuid_port_map[port_id] for port_id in six.iterkeys(updated_ports))
+        ports_to_skip = collections.defaultdict(list)
 
         for port in found_ports:
             port_segmentation_id = port.get('segmentation_id', None)
             port_network_type = port.get('network_type', None)
             port_vlan_id = port['port_desc'].vlan_id
-            if port.get('port_id', None) \
-                    and ((port_segmentation_id \
-                            and port_network_type == 'vlan' \
-                            and (port_segmentation_id != port_vlan_id)) \
-                         or port_network_type == 'flat'):
-                ports_to_bind.append(port)
-            else:
+
+            if not port.get('port_id', None):
                 # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
                 # or vms not managed by openstack
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
+                continue
+
+            if port_network_type == 'vlan' and port_segmentation_id:
+                if port_segmentation_id != port_vlan_id:
+                    ports_to_bind.append(port)
+                else:
+                    # Skip ports that are already bound to the same vlan.
+                    # This happens on agent restart with existing instances.
+                    ports_to_skip[port['port_desc'].dvs_uuid].append(port)
+                continue
+
+            if port_network_type == 'flat':
+                ports_to_bind.append(port)
+                continue
+
+            LOG.warning("Unsupported port_network_type {} for port {}".format(port_network_type, port))
 
         if self.unbound_ports:
             unbound_ports = self.unbound_ports.copy()
@@ -364,6 +376,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         # Apply the changes
         for dvs in six.itervalues(self.api.uuid_dvs_map):
             dvs.apply_queued_update_specs()
+
+        LOG.debug("Reporting skipped ports as bound to neutron: {}".format(ports_to_skip))
+        for dvs_uuid, ports in six.iteritems(ports_to_skip):
+            self._bound_ports(self.api.uuid_dvs_map[dvs_uuid],
+                              [port['port_desc'].port_key for port in ports],
+                              [])
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):

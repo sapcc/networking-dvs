@@ -25,14 +25,16 @@ class SpecBuilder(object):
         spec.defaultPortConfig = default_port_config
         policy = self.factory.create('ns0:VMwareDVSPortgroupPolicy')
         policy.blockOverrideAllowed = '1'
-        policy.livePortMovingAllowed = '0'
+        policy.livePortMovingAllowed = '1'
         policy.portConfigResetAtDisconnect = '1'
-        policy.shapingOverrideAllowed = '0'
-        policy.trafficFilterOverrideAllowed = '0'
-        policy.vendorConfigOverrideAllowed = '0'
+        policy.shapingOverrideAllowed = '1'
+        policy.trafficFilterOverrideAllowed = '1'
+        policy.vendorConfigOverrideAllowed = '1'
         policy.vlanOverrideAllowed = '1'
-        policy.uplinkTeamingOverrideAllowed = '0'
-        policy.securityPolicyOverrideAllowed = '0'
+        policy.uplinkTeamingOverrideAllowed = '1'
+        policy.securityPolicyOverrideAllowed = '1'
+        policy.networkResourcePoolOverrideAllowed = '1'
+        policy.ipfixOverrideAllowed = '1'
         spec.policy = policy
         return spec
 
