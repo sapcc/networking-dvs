@@ -585,7 +585,6 @@ class VCenter(object):
         return ports_by_switch_and_key
 
     @c_util.stats.timed()
-    @dvs_util.wrap_retry
     def bind_ports(self, ports, callback=None):
         ports_by_switch_and_key = self.ports_by_switch_and_key(ports)
 
