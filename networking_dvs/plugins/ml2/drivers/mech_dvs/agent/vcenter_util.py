@@ -22,6 +22,7 @@ suds_patch.apply()
 
 from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
+from eventlet.greenpool import GreenPile
 
 import atexit
 import attr
@@ -538,17 +539,23 @@ class VCenter(object):
             self.security_groups_attribute_key = field.key
 
         if reset_state:
+            pile = GreenPile(self.pool) if self.pool else GreenPile()
             # Will drop all security group rules from matching dvportgroups and remove empty portgroups
             for uuid, dvs in six.iteritems(self.uuid_dvs_map):
                 sg_tagged_pgs = dvs.get_pg_per_sg_attribute(self.security_groups_attribute_key)
                 for sg_set, pg in six.iteritems(sg_tagged_pgs):
+                    wait_pile = True
                     if len(pg["vm"]) == 0:
-                        dvs._delete_port_group(pg["ref"], pg["name"], ignore_in_use=True)
+                        pile.spawn(dvs._delete_port_group, pg["ref"], pg["name"], ignore_in_use=True)
                     else:
-                        dvs.update_dvportgroup(pg["ref"],
-                                               pg["configVersion"],
-                                               port_config=None,
-                                               name=dvs.dvportgroup_name(sg_set))
+                        pile.spawn(dvs.update_dvportgroup,
+                                   pg["ref"],
+                                   pg["configVersion"],
+                                   port_config=None,
+                                   name=dvs.dvportgroup_name(sg_set))
+            if wait_pile:
+                for result in pile:
+                    pass
 
     @staticmethod
     def update_port_desc(port, port_info):
