@@ -19,6 +19,7 @@ import uuid
 import re
 import six
 import string
+import uuid
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -413,7 +414,8 @@ class DVSController(object):
 
         try:
             pg_spec = self.builder.pg_config(port_config)
-            pg_spec.name = self.dvportgroup_name(sg_set)
+            # Create the portgroup with a random name
+            pg_spec.name = str(uuid.uuid4())
             pg_spec.numPorts = 0
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
@@ -427,6 +429,7 @@ class DVSController(object):
 
             pg_ref = result.result
 
+            # Tag the portgroup for the specific security group set
             self.connection.invoke_api(
                 self.connection.vim,
                 "SetField",
@@ -435,8 +438,14 @@ class DVSController(object):
                 key=sg_attr_key,
                 value=sg_set)
 
-            key = vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
-            return {"key": key, "ref": pg_ref}
+            props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref,
+                                                        ["key", "config.configVersion"])
+
+            # Update the portgroup's name according to the convention
+            self.update_dvportgroup(pg_ref, props["config.configVersion"], None,
+                                    self.dvportgroup_name(sg_set))
+
+            return {"key": props["key"], "ref": pg_ref}
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
@@ -458,10 +467,6 @@ class DVSController(object):
 
     @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
-        if not port_config:
-            port_config = self.builder.port_setting()
-            port_config.blocked = self.builder.blocked(False)
-            port_config.filterPolicy = self.builder.filter_policy([], None)
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
