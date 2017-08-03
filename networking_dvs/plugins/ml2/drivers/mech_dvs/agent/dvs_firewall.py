@@ -111,6 +111,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         for dvs_uuid, port_list in six.iteritems(_ports_by_switch(ports)):
             for port in port_list:
                 sg_set = sg_util.security_group_set(port)
+                if not sg_set:
+                    LOG.debug("Port {} has no security group set, skipping processing.".format(port['id']))
+                    continue
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
@@ -195,6 +198,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port_desc = port['port_desc']
             dvs_uuid = port_desc.dvs_uuid
             sg_set = sg_util.security_group_set(port)
+            if not sg_set:
+                LOG.debug("Port {} has no security group set, skipping reassignment.".format(port['id']))
+                continue
             sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
 
             # check whether VM needs to be reassigned to match its security group set
