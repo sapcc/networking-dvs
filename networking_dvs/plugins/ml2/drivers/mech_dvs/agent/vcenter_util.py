@@ -539,6 +539,7 @@ class VCenter(object):
             self.security_groups_attribute_key = field.key
 
         if reset_state:
+            wait_pile = False
             pile = GreenPile(self.pool) if self.pool else GreenPile()
             # Will drop all security group rules from matching dvportgroups and remove empty portgroups
             for uuid, dvs in six.iteritems(self.uuid_dvs_map):
