@@ -115,7 +115,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
-    @dvs_util.wrap_retry
     @stats.timed()
     def _apply_changed_sg_aggr(self):
 
