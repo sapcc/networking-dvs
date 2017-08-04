@@ -15,7 +15,6 @@
 
 from time import sleep
 import hashlib
-import uuid
 import re
 import six
 import string
@@ -394,6 +393,46 @@ class DVSController(object):
 
         return result
 
+    def _get_portgroups(self, max_objects=100):
+        """Get all portgroups on the switch"""
+        vim = self.connection.vim
+        property_collector = vim.service_content.propertyCollector
+
+        traversal_spec = vim_util.build_traversal_spec(
+                vim.client.factory,
+                "dvs_to_dvpg",
+                "DistributedVirtualSwitch",
+                "portgroup",
+                False,
+                [])
+        object_spec = vim_util.build_object_spec(
+                vim.client.factory,
+                self._dvs,
+                [traversal_spec])
+        property_spec = vim_util.build_property_spec(
+                vim.client.factory,
+                "DistributedVirtualPortgroup",
+                ["key", "name", "config.configVersion", "customValue", "vm"])
+
+        property_filter_spec = vim_util.build_property_filter_spec(
+                vim.client.factory,
+                [property_spec],
+                [object_spec])
+        options = vim.client.factory.create('ns0:RetrieveOptions')
+        options.maxObjects = max_objects
+
+        pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
+                options=options)
+        result = []
+
+        with vim_util.WithRetrieval(vim, pc_result) as pc_objects:
+            for objContent in pc_objects:
+                props = {prop.name : prop.val for prop in objContent.propSet}
+                props["ref"] = objContent.obj
+                result.append(props)
+
+        return result
+
     @stats.timed()
     def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
         """
@@ -412,10 +451,11 @@ class DVSController(object):
         # which seems to be part of a non-used call path
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
+        dvpg_name = self.dvportgroup_name(sg_set)
+
         try:
             pg_spec = self.builder.pg_config(port_config)
-            # Create the portgroup with a random name
-            pg_spec.name = str(uuid.uuid4())
+            pg_spec.name = dvpg_name
             pg_spec.numPorts = 0
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
@@ -438,14 +478,31 @@ class DVSController(object):
                 key=sg_attr_key,
                 value=sg_set)
 
-            props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref,
-                                                        ["key", "config.configVersion"])
-
-            # Update the portgroup's name according to the convention
-            self.update_dvportgroup(pg_ref, props["config.configVersion"], None,
-                                    self.dvportgroup_name(sg_set))
-
+            props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref, ["key"])
             return {"key": props["key"], "ref": pg_ref}
+        except vmware_exceptions.DuplicateName as dn:
+            LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
+            portgroups = self._get_portgroups()
+            for existing in portgroups:
+                if existing['name'] != dvpg_name:
+                    continue
+                break # found it
+            else:
+                LOG.error("Portgroup with matching name {} not found while expected.".format(dvpg_name))
+                return
+
+            self.update_dvportgroup(existing["ref"], existing["config.configVersion"], port_config)
+
+            # Tag the portgroup for the specific security group set
+            self.connection.invoke_api(
+                self.connection.vim,
+                "SetField",
+                self._service_content.customFieldsManager,
+                entity=existing["ref"],
+                key=sg_attr_key,
+                value=sg_set)
+
+            return existing
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
