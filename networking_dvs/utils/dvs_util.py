@@ -341,55 +341,18 @@ class DVSController(object):
         return callbacks, update_specs_by_key
 
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
-        vim = self.connection.vim
-        property_collector = vim.service_content.propertyCollector
-
-        traversal_spec = vim_util.build_traversal_spec(
-                vim.client.factory,
-                "dvs_to_dvpg",
-                "DistributedVirtualSwitch",
-                "portgroup",
-                False,
-                [])
-        object_spec = vim_util.build_object_spec(
-                vim.client.factory,
-                self._dvs,
-                [traversal_spec])
-        property_spec = vim_util.build_property_spec(
-                vim.client.factory,
-                "DistributedVirtualPortgroup",
-                ["key", "name", "config.configVersion", "customValue", "vm"])
-
-        property_filter_spec = vim_util.build_property_filter_spec(
-                vim.client.factory,
-                [property_spec],
-                [object_spec])
-        options = vim.client.factory.create('ns0:RetrieveOptions')
-        options.maxObjects = max_objects
-
-        pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
-                options=options)
+        portgroups = self._get_portgroups(max_objects)
         result = {}
 
-        while True:
-            for objContent in pc_result.objects:
-                props = {prop.name : prop.val for prop in objContent.propSet}
-                if props["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
-                    for custom_field_value in props["customValue"]["CustomFieldValue"]:
-                        if custom_field_value.key == sg_attr_key:
-                            result[custom_field_value.value] = {
-                                "key": props["key"],
-                                "ref": objContent.obj,
-                                "configVersion": props["config.configVersion"],
-                                "name": props["name"],
-                                "vm": props["vm"],
-                            }
-                            break
+        for dvpg in portgroups:
+            if "customValue" not in dvpg:
+                continue
 
-            if getattr(pc_result, 'token', None):
-                pc_result = vim.ContinueRetrievePropertiesEx(property_collector, token=pc_result.token)
-            else:
-                break
+            if dvpg["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
+                for custom_field_value in dvpg["customValue"]["CustomFieldValue"]:
+                    if custom_field_value.key == sg_attr_key:
+                        result[custom_field_value.value] = dvpg
+                        break
 
         return result
 
@@ -429,6 +392,7 @@ class DVSController(object):
             for objContent in pc_objects:
                 props = {prop.name : prop.val for prop in objContent.propSet}
                 props["ref"] = objContent.obj
+                props["configVersion"] = props["config.configVersion"]
                 result.append(props)
 
         return result
