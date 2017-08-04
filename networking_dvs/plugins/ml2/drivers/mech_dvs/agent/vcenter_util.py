@@ -549,10 +549,13 @@ class VCenter(object):
                     if len(pg["vm"]) == 0:
                         pile.spawn(dvs._delete_port_group, pg["ref"], pg["name"], ignore_in_use=True)
                     else:
+                        port_config = dvs.builder.port_setting()
+                        port_config.blocked = dvs.builder.blocked(False)
+                        port_config.filterPolicy = dvs.builder.filter_policy([], None)
                         pile.spawn(dvs.update_dvportgroup,
                                    pg["ref"],
                                    pg["configVersion"],
-                                   port_config=None,
+                                   port_config,
                                    name=dvs.dvportgroup_name(sg_set))
             if wait_pile:
                 for result in pile:

@@ -15,10 +15,10 @@
 
 from time import sleep
 import hashlib
-import uuid
 import re
 import six
 import string
+import uuid
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -341,6 +341,23 @@ class DVSController(object):
         return callbacks, update_specs_by_key
 
     def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
+        portgroups = self._get_portgroups(max_objects)
+        result = {}
+
+        for dvpg in portgroups:
+            if "customValue" not in dvpg:
+                continue
+
+            if dvpg["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
+                for custom_field_value in dvpg["customValue"]["CustomFieldValue"]:
+                    if custom_field_value.key == sg_attr_key:
+                        result[custom_field_value.value] = dvpg
+                        break
+
+        return result
+
+    def _get_portgroups(self, max_objects=100):
+        """Get all portgroups on the switch"""
         vim = self.connection.vim
         property_collector = vim.service_content.propertyCollector
 
@@ -369,27 +386,14 @@ class DVSController(object):
 
         pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
                 options=options)
-        result = {}
+        result = []
 
-        while True:
-            for objContent in pc_result.objects:
+        with vim_util.WithRetrieval(vim, pc_result) as pc_objects:
+            for objContent in pc_objects:
                 props = {prop.name : prop.val for prop in objContent.propSet}
-                if props["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
-                    for custom_field_value in props["customValue"]["CustomFieldValue"]:
-                        if custom_field_value.key == sg_attr_key:
-                            result[custom_field_value.value] = {
-                                "key": props["key"],
-                                "ref": objContent.obj,
-                                "configVersion": props["config.configVersion"],
-                                "name": props["name"],
-                                "vm": props["vm"],
-                            }
-                            break
-
-            if getattr(pc_result, 'token', None):
-                pc_result = vim.ContinueRetrievePropertiesEx(property_collector, token=pc_result.token)
-            else:
-                break
+                props["ref"] = objContent.obj
+                props["configVersion"] = props["config.configVersion"]
+                result.append(props)
 
         return result
 
@@ -411,9 +415,11 @@ class DVSController(object):
         # which seems to be part of a non-used call path
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
+        dvpg_name = self.dvportgroup_name(sg_set)
+
         try:
             pg_spec = self.builder.pg_config(port_config)
-            pg_spec.name = self.dvportgroup_name(sg_set)
+            pg_spec.name = dvpg_name
             pg_spec.numPorts = 0
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
@@ -427,6 +433,7 @@ class DVSController(object):
 
             pg_ref = result.result
 
+            # Tag the portgroup for the specific security group set
             self.connection.invoke_api(
                 self.connection.vim,
                 "SetField",
@@ -435,8 +442,31 @@ class DVSController(object):
                 key=sg_attr_key,
                 value=sg_set)
 
-            key = vim_util.get_object_properties(self.connection.vim, pg_ref, ["key"])[0].propSet[0].val
-            return {"key": key, "ref": pg_ref}
+            props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref, ["key"])
+            return {"key": props["key"], "ref": pg_ref}
+        except vmware_exceptions.DuplicateName as dn:
+            LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
+            portgroups = self._get_portgroups()
+            for existing in portgroups:
+                if existing['name'] != dvpg_name:
+                    continue
+                break # found it
+            else:
+                LOG.error("Portgroup with matching name {} not found while expected.".format(dvpg_name))
+                return
+
+            self.update_dvportgroup(existing["ref"], existing["config.configVersion"], port_config)
+
+            # Tag the portgroup for the specific security group set
+            self.connection.invoke_api(
+                self.connection.vim,
+                "SetField",
+                self._service_content.customFieldsManager,
+                entity=existing["ref"],
+                key=sg_attr_key,
+                value=sg_set)
+
+            return existing
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
@@ -458,10 +488,6 @@ class DVSController(object):
 
     @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
-        if not port_config:
-            port_config = self.builder.port_setting()
-            port_config.blocked = self.builder.blocked(False)
-            port_config.filterPolicy = self.builder.filter_policy([], None)
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
