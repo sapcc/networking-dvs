@@ -487,7 +487,9 @@ class DVSController(object):
         return name
 
     @stats.timed()
-    def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None):
+    def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None, retries=3):
+        if retries <= 0:
+            raise Exception("Maximum retries reached.")
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
@@ -500,6 +502,11 @@ class DVSController(object):
 
             self.connection.wait_for_task(pg_update_task)
         except vmware_exceptions.VimException as e:
+            if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
+                LOG.debug("Concurrent modification detected, will retry.")
+                config_version = vim_util.get_object_property(
+                    self.connection.vim, pg_ref, "config.configVersion")
+                return self.update_dvportgroup(pg_ref, config_version, port_config, name, retries-1)
             raise exceptions.wrap_wmvare_vim_exception(e)
 
     def switch_port_blocked_state(self, port):
