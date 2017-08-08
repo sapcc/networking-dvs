@@ -489,7 +489,8 @@ class DVSController(object):
     @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None, retries=3):
         if retries <= 0:
-            raise Exception("Maximum retries reached.")
+            LOG.error("Maximum number of update retries reached for portgroup {}.".format(pg_ref))
+            return
         try:
             pg_spec = self.builder.pg_config(port_config)
             pg_spec.configVersion = config_version
