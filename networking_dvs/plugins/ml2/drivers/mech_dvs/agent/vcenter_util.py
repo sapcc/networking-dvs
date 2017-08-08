@@ -573,8 +573,7 @@ class VCenter(object):
             return False
 
         for k, v in six.iteritems(_DVSPortDesc.from_dvs_port(port_info)):
-            if v:
-                setattr(port_desc, k, v)
+            setattr(port_desc, k, v)
         return True
 
     def ports_by_switch_and_key(self, ports):
