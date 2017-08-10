@@ -32,6 +32,10 @@ vmware_opts = [
         default=100,
         help=_('number of vsphere connections pool '
                'must be higher for intensive operations')),
+    cfg.IntOpt(
+        'host_rectify_timeout',
+        default=120,
+        help=_('Seconds between rectify calls in case of dvs bulk faults.')),
     cfg.StrOpt('vsphere_login', default='administrator',
                help=_("Vsphere login.")),
     cfg.ListOpt('network_maps',
