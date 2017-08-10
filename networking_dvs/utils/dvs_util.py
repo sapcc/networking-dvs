@@ -545,7 +545,6 @@ class DVSController(object):
                     "RectifyDvsOnHost_Task",
                     self._service_content.dvSwitchManager,
                     hosts=list(hosts))
-        self.connection.wait_for_task(rectify_task)
 
     def switch_port_blocked_state(self, port):
         try:
