@@ -19,6 +19,7 @@ import re
 import six
 import string
 import uuid
+import time
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
@@ -63,7 +64,7 @@ def wrap_retry(func):
 class DVSController(object):
     """Controls one DVS."""
 
-    def __init__(self, dvs_name, connection=None, pool=None):
+    def __init__(self, dvs_name, connection=None, pool=None, rectify_wait=120):
         self.connection = connection
         self.dvs_name = dvs_name
         self._uuid = None
@@ -74,6 +75,8 @@ class DVSController(object):
         self._service_content = connection.vim.retrieve_service_content()
         self.builder = spec_builder.SpecBuilder(
             self.connection.vim.client.factory)
+        self.hosts_to_rectify = {}
+        self.rectify_wait = rectify_wait
         try:
             self._dvs, self._datacenter = self._get_dvs(dvs_name, connection)
             # (SlOPS) To do release blocked port after use
@@ -508,7 +511,40 @@ class DVSController(object):
                 config_version = vim_util.get_object_property(
                     self.connection.vim, pg_ref, "config.configVersion")
                 return self.update_dvportgroup(pg_ref, config_version, port_config, name, retries-1)
+            if dvs_const.BULK_FAULT_TEXT in str(e):
+                info = get_task_info(self.connection, pg_update_task)
+                self.rectifyForFault(info.error.fault)
+                return
             raise exceptions.wrap_wmvare_vim_exception(e)
+
+    def rectifyForFault(self, fault):
+        """
+        Handles DvsOperationBulkFault by attempting to rectify the hosts' configuration with the switch
+        """
+        host_faults = getattr(fault, "hostFault", None)
+        hosts = set()
+        for hf in host_faults:
+            if not hf:
+                continue
+            host_ref = hf.host.value
+            if host_ref in self.hosts_to_rectify:
+                if time.time() - self.rectify_wait > self.hosts_to_rectify[host_ref]:
+                    self.hosts_to_rectify[host_ref] = time.time()
+                    hosts.add(host_ref)
+                else:
+                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref))
+            else:
+                self.hosts_to_rectify[host_ref] = time.time()
+                hosts.add(host_ref)
+
+        if not hosts:
+            return
+        LOG.debug("Hosts to rectify: {}".format(hosts))
+        rectify_task = self.connection.invoke_api(
+                    self.connection.vim,
+                    "RectifyDvsOnHost_Task",
+                    self._service_content.dvSwitchManager,
+                    hosts=list(hosts))
 
     def switch_port_blocked_state(self, port):
         try:
@@ -850,7 +886,8 @@ def create_network_map_from_config(config, connection=None, pool=None):
     connection = connection or connect(config)
     network_map = {}
     for network, dvs in six.iteritems(neutron_utils.parse_mappings(config.network_maps)):
-        network_map[network] = DVSController(dvs, connection=connection, pool=pool)
+        network_map[network] = DVSController(dvs, connection=connection, pool=pool,
+                                             rectify_wait=config.host_rectify_timeout)
     return network_map
 
 
@@ -874,3 +911,9 @@ def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
     dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
     return dvs
 
+def get_task_info(connection, task_ref):
+    """
+    Helper that returns a task' info field
+    """
+    task_info = connection.invoke_api(vim_util, 'get_object_property', connection.vim, task_ref, 'info')
+    return task_info
