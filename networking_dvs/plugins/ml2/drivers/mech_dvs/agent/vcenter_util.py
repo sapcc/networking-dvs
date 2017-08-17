@@ -376,9 +376,12 @@ class VCenterMonitor(object):
 
         for change in change_set:
             change_name = change.name
+            change_val = getattr(change, "val", None)
+            if not change_val:
+                LOG.debug("Change name {} has no value.".format(change_name))
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
-                    for v in change.val[0]:
+                    for v in change_val[0]:
                         port_desc = self._port_desc_from_nic_change(vmobref, v)
                         if port_desc:
                             vm_hw[port_desc.device_key] = port_desc
@@ -396,28 +399,28 @@ class VCenterMonitor(object):
                 if port_desc:
                     attribute = change_name[id_end + 2:]
                     if "connectable.connected" == attribute:
-                        port_desc.connected = change.val
+                        port_desc.connected = change_val
                         self._handle_port_update(port_desc, now)
                     elif "connectable.status" == attribute:
-                        port_desc.status = change.val
+                        port_desc.status = change_val
                         self._handle_port_update(port_desc, now)
                     elif "macAddress" == attribute:
-                        port_desc.mac_address = str(change.val)
+                        port_desc.mac_address = str(change_val)
                     elif "backing.port.connectionCookie" == attribute:
-                        port_desc.connection_cookie = str(change.val)
+                        port_desc.connection_cookie = str(change_val)
                         self._handle_port_update(port_desc, now)
                     elif "backing.port.portKey" == attribute:
-                        port_desc.port_key = str(change.val)
+                        port_desc.port_key = str(change_val)
                         self._handle_port_update(port_desc, now)
                 else:
-                    port_desc = self._port_desc_from_nic_change(vmobref, change.val)
+                    port_desc = self._port_desc_from_nic_change(vmobref, change_val)
                     if port_desc:
                         vm_hw[port_desc.device_key] = port_desc
                         self._handle_port_update(port_desc, now)
 
             elif change_name == 'runtime.powerState':
-                # print("{}: {}".format(vm, change.val))
-                vm_hw['power_state'] = change.val
+                # print("{}: {}".format(vm, change_val))
+                vm_hw['power_state'] = change_val
                 for port_desc in six.itervalues(vm_hw):
                     if isinstance(port_desc, _DVSPortMonitorDesc):
                         self._handle_port_update(port_desc, now)
