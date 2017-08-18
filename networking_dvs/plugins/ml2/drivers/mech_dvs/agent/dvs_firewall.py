@@ -117,6 +117,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
+                if 'vlan' not in sg_aggr \
+                        and 'vlan' == port.get('network_type', None) \
+                        and port.get('segmentation_id', None):
+                    sg_aggr['vlan'] = port['segmentation_id']
 
     @stats.timed()
     def _apply_changed_sg_aggr(self):
@@ -148,6 +152,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_set_rules = sg_util.get_rules(sg_aggr)
                 port_config = sg_util.port_configuration(
                         builder, None, sg_set_rules, {}, None, None).setting
+                if 'vlan' in sg_aggr:
+                    port_config.vlan = builder.vlan(sg_aggr['vlan'])
 
                 if sg_set in pg_per_sg:
                     pg = pg_per_sg[sg_set]
