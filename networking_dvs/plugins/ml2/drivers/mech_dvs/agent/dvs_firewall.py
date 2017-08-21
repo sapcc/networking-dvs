@@ -31,7 +31,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(dict))
         self._green = self.v_center.pool or eventlet
-        self._pile = _pile(self.v_center.pool)
 
     def prepare_port_filter(self, ports):
         # LOG.debug("prepare_port_filter called with %s", pprint.pformat(ports))
@@ -128,11 +127,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         local_pile = _pile(self.v_center.pool)
         local_pile.spawn(noop) # See https://github.com/eventlet/eventlet/issues/53
 
-        # Wait any update tasks from the previous run before proceeding
-        self._pile.spawn(noop)
-        for result in self._pile:
-            pass
-
         for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
 
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
@@ -145,6 +139,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 # LOG.debug("sg_aggr is %s", pprint.pformat(sg_aggr))
                 if not sg_aggr["dirty"]:
                     continue
+
+                if 'gt' not in sg_aggr:
+                    sg_aggr['gt'] = self._green.spawn(noop)
 
                 # Mark as processed, might be reset bellow
                 sg_aggr["dirty"] = False
@@ -159,26 +156,18 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     pg = pg_per_sg[sg_set]
                     if len(sg_set_rules) == 0:
                         if len(pg["vm"]) == 0:
-                            # Spawn it in the non-local pile
-                            self._pile.spawn(
-                                dvs._delete_port_group, pg["ref"], pg["name"], ignore_in_use=True)
+                            sg_aggr['gt'].link(_delete_dvpg, dvs, pg["ref"], pg["name"], True)
                             obsolete_sg_sets.append(sg_set)
                             continue
                         else:
                             # Keep the dirty flag, so that we retry deleting it on the next run
                             sg_aggr["dirty"] = True
                     else:
-                        # A tagged dvportgroup exists, update it
-                        # Spawn it in the non-local pile
-                        self._pile.spawn(
-                            dvs.update_dvportgroup,
-                            pg["ref"],
-                            pg["configVersion"],
-                            port_config)
+                        sg_aggr['gt'].link(_update_dvpg, dvs, pg["ref"], pg["configVersion"], port_config)
                     sg_aggr["dvpg-key"] = pg["key"]
                 else:
                     local_pile.spawn(
-                        create_dvpg_and_update_sg_aggr,
+                        _create_dvpg_and_update_sg_aggr,
                         dvs,
                         self.v_center.security_groups_attribute_key,
                         sg_set,
@@ -188,8 +177,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # Release no-longer used sg_aggr objects
             for obsolete_sg_set in obsolete_sg_sets:
                 del sg_aggregates[obsolete_sg_set]
-
-        eventlet.sleep(0) # yield to allow DVPG updates to take place
 
         # Wait new dvpg creations, necessary for vm reassignments
         for result in local_pile:
@@ -255,7 +242,15 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         eventlet.sleep(0) # yield to allow VM network reassignments to take place
 
-def create_dvpg_and_update_sg_aggr(dvs, sg_attr_key, sg_set, port_config, sg_aggr):
+def _delete_dvpg(gt, dvs, pg_ref, pg_name, ignore_in_use):
+    """ Delete dvportgroup function for use with greenthreads' link """
+    dvs._delete_port_group(pg_ref, pg_name, ignore_in_use)
+
+def _update_dvpg(gt, dvs, pg_ref, config_version, port_config):
+    """ Update dvportgroup function for use with greenthreads' link """
+    dvs.update_dvportgroup(pg_ref, config_version, port_config)
+
+def _create_dvpg_and_update_sg_aggr(dvs, sg_attr_key, sg_set, port_config, sg_aggr):
     pg = dvs.create_dvportgroup(sg_attr_key, sg_set, port_config)
     sg_aggr["dvpg-key"] = pg["key"]
 
@@ -278,7 +273,7 @@ def _ports_by_switch(ports=None):
 
     return ports_by_switch
 
-def noop():
+def noop(*args):
     pass
 
 def _pile(pool=None):
