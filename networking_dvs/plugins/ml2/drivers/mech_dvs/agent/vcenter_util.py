@@ -312,8 +312,8 @@ class VCenterMonitor(object):
             try:
                 self._run(config)
             except:
-                import traceback, sys
-                traceback.print_exc(file=sys.stdout)
+                import traceback
+                LOG.error(traceback.format_exc())
                 os._exit(1)
 
     def _create_property_filter(self, property_collector, config):
