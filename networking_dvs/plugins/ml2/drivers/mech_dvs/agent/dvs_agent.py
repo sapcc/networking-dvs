@@ -377,8 +377,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         for dvs in six.itervalues(self.api.uuid_dvs_map):
             dvs.apply_queued_update_specs()
 
-        LOG.debug("Reporting skipped ports as bound to neutron: {}".format(ports_to_skip))
         for dvs_uuid, ports in six.iteritems(ports_to_skip):
+            LOG.debug("Reporting skipped ports as bound to neutron: {}".format(
+                [port["port_id"] for port in ports]))
             self._bound_ports(self.api.uuid_dvs_map[dvs_uuid],
                               [port['port_desc'].port_key for port in ports],
                               [])
