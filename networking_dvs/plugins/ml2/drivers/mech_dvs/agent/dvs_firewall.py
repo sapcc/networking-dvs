@@ -116,12 +116,13 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     sg_aggr['ports'] = deque()
 
                 # Schedule for reassignment
-                if 'dvpg-key' in sg_aggr:
-                    if port['port_desc'].port_group_key != sg_aggr['dvpg-key']:
+                if not decrement:
+                    if 'dvpg-key' in sg_aggr:
+                        if port['port_desc'].port_group_key != sg_aggr['dvpg-key']:
+                            sg_aggr['ports'].append(port)
+                        # else: port is properly assigned, no need to reassign
+                    else:
                         sg_aggr['ports'].append(port)
-                    # else: port is properly assigned, no need to reassign
-                else:
-                    sg_aggr['ports'].append(port)
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
