@@ -269,7 +269,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
         now = None
         with timeutils.StopWatch() as w:
             for port_key in succeeded_keys:
-                port = dvs.ports_by_key[port_key]
+                port = dvs.ports_by_key.get(port_key, None)
+                if not port:
+                    LOG.debug("Port with key {} has already been removed.".format(port_key))
+                    continue
                 port_id = port["port_id"]
                 self.unbound_ports.pop(port_id, None)
                 if port["admin_state_up"]:
