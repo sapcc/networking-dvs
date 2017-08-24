@@ -211,6 +211,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 LOG.debug("Port {} has no security group set, skipping reassignment.".format(port['id']))
                 continue
             port_desc = port['port_desc']
+            if port_desc.port_group_key == sg_aggr['dvpg-key']:
+                # Existing ports can enter the reassignment queue
+                # on agent boot before the dvpg-key has been set
+                # on the sg_aggr object. Filter them here.
+                continue
             dvs_uuid = port_desc.dvs_uuid
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             client_factory = dvs.connection.vim.client.factory
