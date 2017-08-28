@@ -35,6 +35,7 @@ from neutron.i18n import _LI, _LW, _LE
 from oslo_log import log
 from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
+from oslo_utils import timeutils
 from oslo_vmware import vim_util, exceptions
 
 from networking_dvs.common import config as dvs_config, util as c_util
@@ -111,6 +112,8 @@ class _DVSPortDesc(object):
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
     connected_since = attr.ib(default=None)
+    firewall_start = attr.ib(default=None)
+    firewall_end = attr.ib(default=None)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
@@ -412,6 +415,13 @@ class VCenterMonitor(object):
                     elif "backing.port.portKey" == attribute:
                         port_desc.port_key = str(change_val)
                         self._handle_port_update(port_desc, now)
+                    elif "backing.port.portgroupKey" == attribute:
+                        # An update on the portgroup keys means
+                        # that the virtual machine got reassigned
+                        # to a different distributed virtual portgroup,
+                        # most likely as a result of the firewall driver.
+                        port_desc.firewall_end = timeutils.utcnow() - port_desc.firewall_start
+                        LOG.debug("Port reassigned in %d seconds.", port_desc.firewall_end.seconds)
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref, change_val)
                     if port_desc:
@@ -671,7 +681,6 @@ class VCenter(object):
 def main():
     import sys
     from neutron.common import config as common_config
-    from oslo_utils import timeutils
     common_config.init(sys.argv[1:])
     common_config.setup_logging()
 

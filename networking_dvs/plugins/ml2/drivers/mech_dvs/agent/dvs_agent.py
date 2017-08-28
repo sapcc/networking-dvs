@@ -281,9 +281,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                     port_down_ids.append(port_id)
 
                 port_desc = port.get('port_desc', None)
-                if port_desc and port_desc.connected_since:
+                if not port_desc:
+                    continue
+                if port_desc.connected_since:
                     now = now or timeutils.utcnow()
                     stats.timing('networking_dvs.ports.bound', now - port_desc.connected_since)
+                if port_desc.firewall_end:
+                    stats.timing('networking_dvs.ports.reassigned', port_desc.firewall_end)
 
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
@@ -374,6 +378,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             # Needs to called, even if there is no added or updated ports, as it also executes the deferred updates
             added_ports -= six.viewkeys(self.unbound_ports)
             updated_ports = six.viewkeys(updated_ports) - added_ports
+            now = timeutils.utcnow()
+            self._touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in added_ports], now)
+            self._touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in updated_ports], now)
             self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
         # Apply the changes
@@ -392,6 +399,18 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                       self.agent_id, self.conf.host))
             self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+
+    def _touch_fw_timestamp(self, ports, now=None):
+        """ Set a timestamp on the ports to measure firewall latency """
+        if not ports or len(ports) == 0:
+            return
+        now = now or timeutils.utcnow()
+        for port in ports:
+            port_desc = port.get('port_desc', None)
+            if not port_desc:
+                LOG.debug("Port {} has no description object.".format(port['id']))
+                continue
+            port_desc.firewall_start = now
 
     def rpc_loop(self):
         while self._check_and_handle_signal():
