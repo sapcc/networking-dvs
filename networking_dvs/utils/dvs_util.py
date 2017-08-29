@@ -24,6 +24,7 @@ import time
 from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
 from oslo_log import log
+from oslo_utils import timeutils
 from oslo_vmware import api
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
@@ -427,6 +428,7 @@ class DVSController(object):
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
 
+            now = timeutils.utcnow()
             pg_create_task = self.connection.invoke_api(
                 self.connection.vim,
                 'CreateDVPortgroup_Task',
@@ -446,6 +448,9 @@ class DVSController(object):
                 value=sg_set)
 
             props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref, ["key"])
+            delta = timeutils.utcnow() - now
+            stats.timing('networking_dvs.dvportgroup.created', delta)
+            LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref, delta.seconds))
             return {"key": props["key"], "ref": pg_ref}
         except vmware_exceptions.DuplicateName as dn:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
@@ -499,12 +504,16 @@ class DVSController(object):
             pg_spec.configVersion = config_version
             if name:
                 pg_spec.name = name
+
+            now = timeutils.utcnow()
             pg_update_task = self.connection.invoke_api(
                 self.connection.vim,
                 'ReconfigureDVPortgroup_Task',
                 pg_ref, spec=pg_spec)
 
             self.connection.wait_for_task(pg_update_task)
+            stats.timing('networking_dvs.dvportgroup.updated', timeutils.utcnow() - now)
+            LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref, delta.seconds))
         except vmware_exceptions.VimException as e:
             if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
                 LOG.debug("Concurrent modification detected, will retry.")
