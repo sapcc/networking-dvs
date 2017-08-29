@@ -512,7 +512,8 @@ class DVSController(object):
                 pg_ref, spec=pg_spec)
 
             self.connection.wait_for_task(pg_update_task)
-            stats.timing('networking_dvs.dvportgroup.updated', timeutils.utcnow() - now)
+            delta = timeutils.utcnow() - now
+            stats.timing('networking_dvs.dvportgroup.updated', delta)
             LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref, delta.seconds))
         except vmware_exceptions.VimException as e:
             if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
