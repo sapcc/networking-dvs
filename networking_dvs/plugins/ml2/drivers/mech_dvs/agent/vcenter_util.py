@@ -420,8 +420,9 @@ class VCenterMonitor(object):
                         # that the virtual machine got reassigned
                         # to a different distributed virtual portgroup,
                         # most likely as a result of the firewall driver.
-                        port_desc.firewall_end = timeutils.utcnow() - port_desc.firewall_start
-                        LOG.debug("Port reassigned in %d seconds.", port_desc.firewall_end.seconds)
+                        if port_desc.firewall_start:
+                            port_desc.firewall_end = timeutils.utcnow() - port_desc.firewall_start
+                            LOG.debug("Port reassigned in %d seconds.", port_desc.firewall_end.seconds)
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref, change_val)
                     if port_desc:
