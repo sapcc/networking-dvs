@@ -450,7 +450,7 @@ class DVSController(object):
             props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref, ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
-            LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref, delta.seconds))
+            LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
             return {"key": props["key"], "ref": pg_ref}
         except vmware_exceptions.DuplicateName as dn:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
@@ -497,7 +497,7 @@ class DVSController(object):
     @stats.timed()
     def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None, retries=3):
         if retries <= 0:
-            LOG.error("Maximum number of update retries reached for portgroup {}.".format(pg_ref))
+            LOG.error("Maximum number of update retries reached for portgroup {}.".format(pg_ref.value))
             return
         try:
             pg_spec = self.builder.pg_config(port_config)
@@ -514,7 +514,7 @@ class DVSController(object):
             self.connection.wait_for_task(pg_update_task)
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.updated', delta)
-            LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref, delta.seconds))
+            LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
         except vmware_exceptions.VimException as e:
             if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
                 LOG.debug("Concurrent modification detected, will retry.")
