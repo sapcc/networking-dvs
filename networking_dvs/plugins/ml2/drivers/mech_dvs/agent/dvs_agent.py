@@ -20,9 +20,6 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 
     eventlet.monkey_patch()
 
-from networking_dvs.patches import suds_patch
-suds_patch.apply()
-
 import collections
 import signal
 import six

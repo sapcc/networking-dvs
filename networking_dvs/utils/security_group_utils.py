@@ -29,11 +29,6 @@ from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
 
-#### Monkey-patch
-from networking_dvs.patches import suds_patch
-suds_patch.apply()
-
-
 HASHED_RULE_INFO_KEYS = [
     'source_ip_prefix',
     'dest_ip_prefix',
