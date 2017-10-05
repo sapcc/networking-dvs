@@ -44,6 +44,9 @@ from networking_dvs.common.util import dict_merge, stats
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
+def touch_file(fname, times=None):
+    with open(fname, 'a'):
+        os.utime(fname, times)
 
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
@@ -298,6 +301,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     @stats.timed()
     def process_ports(self):
         LOG.debug("Entered")
+        touch_file('/tmp/neutron-dvs-agent.alive')
         deleted_ports = self.deleted_ports.copy()
         if deleted_ports:
             self.deleted_ports = self.deleted_ports - deleted_ports  # This way we miss fewer concurrent update
