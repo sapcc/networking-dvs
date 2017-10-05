@@ -823,6 +823,7 @@ class DVSController(object):
 
     def get_port_info_by_portkey(self, port_key):
         """pg - ManagedObjectReference of Port Group"""
+        LOG.debug("Fetching port info for {}".format(port_key))
         criteria = self.builder.port_criteria(port_key=port_key)
         port_info = self.connection.invoke_api(
             self.connection.vim,

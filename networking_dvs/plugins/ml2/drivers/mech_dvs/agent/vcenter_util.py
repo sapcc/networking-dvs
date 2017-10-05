@@ -664,6 +664,7 @@ class VCenter(object):
                 if not VCenter.update_port_desc(port, port_info):
                     port_desc = port['port_desc']
                     ports_by_mac.pop(port_desc.mac_address)
+        LOG.debug("Read all ports")
 
     def stop(self):
         self._monitor_process.stop()

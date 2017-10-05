@@ -209,13 +209,15 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
     def _scan_ports(self):
         try:
             ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
-            update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
-            missing = self._read_neutron_ports(ports_by_mac)
-            update_ports_thread.wait()
-            for mac in missing:
-                ports_by_mac.pop(mac, None)
+            LOG.debug(_LI("Got {} ports".format(len(ports_by_mac))))
+            if ports_by_mac:
+                update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
+                missing = self._read_neutron_ports(ports_by_mac)
+                update_ports_thread.wait()
+                for mac in missing:
+                    ports_by_mac.pop(mac, None)
 
-            LOG.debug(_LI("Scan {} ports completed (Missing {})".format(len(ports_by_mac), missing)))
+                LOG.debug(_LI("Scan {} ports completed (Missing {})".format(len(ports_by_mac), missing)))
 
             return ports_by_mac.values()
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
@@ -229,6 +231,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
                 neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
                                                                          agent_id=self.agent_id,
                                                                          host=self.conf.host)
+            LOG.debug(_LI("Received port details".format(len(neutron_ports))))
         else:
             neutron_ports = []
         for neutron_info in neutron_ports:
@@ -294,7 +297,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     @stats.timed()
     def process_ports(self):
-        # LOG.info("******* Processing Ports *******")
+        LOG.debug("Entered")
         deleted_ports = self.deleted_ports.copy()
         if deleted_ports:
             self.deleted_ports = self.deleted_ports - deleted_ports  # This way we miss fewer concurrent update
@@ -390,6 +393,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
             self._bound_ports(self.api.uuid_dvs_map[dvs_uuid],
                               [port['port_desc'].port_key for port in ports],
                               [])
+        LOG.debug("Left")
+
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
