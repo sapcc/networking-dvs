@@ -14,6 +14,7 @@
 #    under the License.
 
 import abc
+import attr
 import copy
 import six
 import string
@@ -41,6 +42,33 @@ HASHED_RULE_INFO_KEYS = [
     'source_port_range_max'
 ]
 
+@attr.s(cmp=True, hash=True)
+class Rule(object):
+    direction = attr.ib(default=None)
+    ethertype = attr.ib(default=None)
+    protocol = attr.ib(default=None)
+
+    dest_ip_prefix = attr.ib(default=None)
+    port_range_min = attr.ib(default=None)
+    port_range_max = attr.ib(default=None)
+
+    source_ip_prefix = attr.ib(default=None)
+    source_port_range_min = attr.ib(default=None)
+    source_port_range_max = attr.ib(default=None)
+
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def get(self, key, default=None):
+        return self.__dict__.get(key, default)
+
+@attr.s(cmp=True, hash=True)
+class SgAggr(object):
+    pg_key = attr.ib(default=None)
+    vlan  = attr.ib(default=None)
+    rules = attr.ib(default=attr.Factory(dict))
+    ports_to_assign = attr.ib(default=attr.Factory(list))
+    dirty = attr.ib(default=True)
 
 class PortConfigSpecBuilder(spec_builder.SpecBuilder):
     def __init__(self, spec_factory):
@@ -81,7 +109,7 @@ class TrafficRuleBuilder(object):
         if protocol:
             int_exp = self.spec_builder.create_spec('ns0:IntExpression')
             int_exp.value = dvs_const.PROTOCOL.get(protocol, protocol)
-            int_exp.negate = 'false'
+            int_exp.negate = False
             self.ip_qualifier.protocol = int_exp
 
         self.name = name
@@ -135,10 +163,10 @@ class TrafficRuleBuilder(object):
             ip, mask = cidr.split('/')
         except ValueError:
             ip = cidr
-            mask = '32'
+            mask = 32
         result = self.spec_builder.create_spec('ns0:IpRange')
         result.addressPrefix = ip
-        result.prefixLength = mask
+        result.prefixLength = int(mask)
         return result
 
     def _has_port(self, min_port):
@@ -244,16 +272,14 @@ def get_port_rules(client_factory, ports):
     hashed_rules = {}
     return build_port_rules(builder, ports, hashed_rules)
 
-
 def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, filter_config_key=None):
     sg_rules = sg_rules or []
     rules = []
     seq = 0
     reverse_seq = len(sg_rules) * 10
     for rule_info in sg_rules:
-        rule_hash = _get_rule_hash(rule_info)
-        if rule_hash in hashed_rules:
-            rule, reverse_rule = hashed_rules[rule_hash]
+        if rule_info in hashed_rules:
+            rule, reverse_rule = hashed_rules[rule_info]
             built_rule = copy.copy(rule)
             built_reverse_rule = copy.copy(reverse_rule)
             built_rule.description = str(seq) + '. regular'
@@ -267,7 +293,7 @@ def port_configuration(builder, port_key, sg_rules, hashed_rules, version=None, 
             cidr_revert = not _rule_excepted(rule)
             reverse_rule = rule.reverse(cidr_revert)
             built_reverse_rule = reverse_rule.build(reverse_seq)
-            hashed_rules[rule_hash] = (built_rule, built_reverse_rule)
+            hashed_rules[rule_info] = (built_rule, built_reverse_rule)
 
         rules.extend([built_rule, built_reverse_rule])
         seq += 10
@@ -299,14 +325,6 @@ def _rule_excepted(rule):
     return False
 
 
-def _get_rule_hash(rule):
-    rule_tokens = []
-    for k in sorted(rule):
-        if k in HASHED_RULE_INFO_KEYS:
-            rule_tokens.append('%s:%s' % (k, rule[k]))
-    return ','.join(rule_tokens)
-
-
 def _create_rule(builder, rule_info, ip=None, name=None):
     if rule_info['direction'] == 'ingress':
         rule_class = IngressRule
@@ -329,10 +347,10 @@ def _create_rule(builder, rule_info, ip=None, name=None):
         rule.port_range = (rule_info.get('port_range_min'),
                            rule_info.get('port_range_max'))
         rule.backward_port_range = (
-            rule_info.get(
-                'source_port_range_min') or source_port_range_min_default,
-            rule_info.get(
-                'source_port_range_max') or dvs_const.MAX_EPHEMERAL_PORT)
+            rule_info.get('source_port_range_min',
+                          source_port_range_min_default),
+            rule_info.get('source_port_range_max',
+                          dvs_const.MAX_EPHEMERAL_PORT))
     return rule
 
 
@@ -340,15 +358,19 @@ def _patch_sg_rules(security_group_rules):
     patched_rules = []
 
     for rule in security_group_rules:
-        if not 'protocol' in rule:
-            for proto in ['icmp', 'udp', 'tcp']:
-                new_rule = rule.copy()
-                new_rule.update(protocol=proto,
-                                port_range_min=0,
-                                port_range_max=65535)
-                patched_rules.append(new_rule)
+        # Remove data, which is purely informational (at this point)
+        rule.pop('security_group_id', None)
+        rule.pop('remote_group_id', None)
+
+        if 'protocol' in rule:
+            patched_rules.append(Rule(**rule))
         else:
-            patched_rules.append(rule)
+            for proto in ['icmp', 'udp', 'tcp']:
+                new_rule = Rule(**rule)
+                new_rule.protocol=proto
+                new_rule.port_range_min=0
+                new_rule.port_range_max=65535
+                patched_rules.append(new_rule)
 
     return patched_rules
 
@@ -359,7 +381,7 @@ def security_group_set(port):
     A security group set is a comma-separated,
     sorted list of security group ids
     """
-    return string.join(sorted(port['security_groups']), ",")
+    return ",".join(sorted(port['security_groups']))
 
 def apply_rules(rules, sg_aggr, decrement=False):
     """
@@ -369,36 +391,25 @@ def apply_rules(rules, sg_aggr, decrement=False):
         "dirty": True|False
     """
 
-    if "rules" in sg_aggr:
-        sg_aggr_rules = sg_aggr["rules"]
-    else:
-        sg_aggr_rules = {}
-        sg_aggr["rules"] = sg_aggr_rules
-
-    if "dirty" not in sg_aggr:
-        sg_aggr["dirty"] = True
-
     for rule in rules:
-        comparable_rule = tuple(sorted(six.iteritems(rule)))
-        if comparable_rule in sg_aggr_rules:
-            count = sg_aggr_rules[comparable_rule]
+        if rule in sg_aggr.rules:
+            count = sg_aggr.rules[rule]
             if decrement:
                 count -= 1
                 if count == 0:
-                    del sg_aggr_rules[comparable_rule]
-                    sg_aggr["dirty"] = True
+                    del sg_aggr.rules[rule]
+                    sg_aggr.dirty = True
                     continue
             else:
                 count += 1
-            sg_aggr_rules[comparable_rule] = count
+            sg_aggr.rules[rule] = count
         else:
-            sg_aggr_rules[comparable_rule] = 1
-            sg_aggr["dirty"] = True
+            sg_aggr.rules[rule] = 1
+            sg_aggr.dirty = True
 
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
-    return [{t[0]: t[1] for t in x} for x in sg_aggr["rules"].keys()]
+    return sorted(six.iterkeys(sg_aggr.rules))
 
-#

@@ -69,18 +69,18 @@ class SpecBuilder(object):
         filter_policy = self.factory.create('ns0:DvsFilterPolicy')
         if rules:
             traffic_ruleset = self.factory.create('ns0:DvsTrafficRuleset')
-            traffic_ruleset.enabled = '1'
+            traffic_ruleset.enabled = True
             traffic_ruleset.rules = rules
             filter_config = self.factory.create('ns0:DvsTrafficFilterConfig')
             filter_config.agentName = "dvfilter-generic-vmware"
-            filter_config.inherited = '0'
+            filter_config.inherited = False
             filter_config.trafficRuleset = traffic_ruleset
             if filter_config_key:
                 filter_config.key = filter_config_key
             filter_policy.filterConfig = [filter_config]
-            filter_policy.inherited = '0'
+            filter_policy.inherited = False
         else:
-            filter_policy.inherited = '1'
+            filter_policy.inherited = True
         return filter_policy
 
     def port_criteria(self, port_key=None, port_group_key=None,
@@ -101,7 +101,7 @@ class SpecBuilder(object):
     def vlan(self, vlan_tag):
         spec_ns = 'ns0:VmwareDistributedVirtualSwitchVlanIdSpec'
         spec = self.factory.create(spec_ns)
-        spec.inherited = '0'
+        spec.inherited = False
         spec.vlanId = vlan_tag
         return spec
 
@@ -109,9 +109,9 @@ class SpecBuilder(object):
         """Value should be True or False"""
         spec = self.factory.create('ns0:BoolPolicy')
         if value:
-            spec.inherited = '0'
-            spec.value = 'true'
+            spec.inherited = False
+            spec.value = True
         else:
-            spec.inherited = '1'
-            spec.value = 'false'
+            spec.inherited = False
+            spec.value = False
         return spec

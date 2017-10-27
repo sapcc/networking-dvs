@@ -1,14 +1,14 @@
-import pprint
 import copy
 import os
 import eventlet
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
     eventlet.monkey_patch()
 
-from eventlet.greenpool import GreenPile
+from eventlet.greenpool import GreenPool
 
 import six
-from collections import defaultdict, deque
+from collections import defaultdict, Counter
+from functools import partial
 
 from neutron.agent import firewall
 from neutron.i18n import _LE, _LW, _LI
@@ -24,12 +24,14 @@ from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
+def _uncurry(_, f, *args, **keywords):
+    return f(*args, **keywords)
 
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
-        self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(dict))
+        self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(sg_util.SgAggr))
         self._green = self.v_center.pool or eventlet
 
     def prepare_port_filter(self, ports):
@@ -37,7 +39,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
         self._process_ports(merged_ports)
-        self._apply_changed_sg_aggr()
+        self._apply_changed_sg_aggregates()
 
     def apply_port_filter(self, ports):
         # This driver does all of its processing during the prepare_port_filter call
@@ -54,7 +56,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._update_ports_by_device_id(merged_ports)
 
         self._process_ports(merged_ports)
-        self._apply_changed_sg_aggr()
+        self._apply_changed_sg_aggregates()
 
     def remove_port_filter(self, port_ids):
         # LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
@@ -62,7 +64,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                            for port_id in port_ids
                            if port_id in self._ports_by_device_id]
         self._process_ports(ports_to_remove, decrement=True)
-        self._apply_changed_sg_aggr()
+        self._apply_changed_sg_aggregates()
         for port_id in port_ids:
             self._ports_by_device_id.pop(port_id, None)
 
@@ -111,109 +113,97 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 if not sg_set:
                     LOG.debug("Port {} has no security group set, skipping processing.".format(port['id']))
                     continue
+
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
-                if 'ports' not in sg_aggr:
-                    sg_aggr['ports'] = deque()
+                if not sg_aggr.pg_key:
+                    dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+                    pg_per_sg = dvs.get_port_group_by_security_group()
+                    pg = pg_per_sg.get(sg_set, {})
+                    if pg:
+                        sg_aggr.pg_key = pg["key"]
+                        sg_aggr.vlan = pg["defaultPortConfig"].vlan.vlanId
 
                 # Schedule for reassignment
                 if not decrement:
-                    if 'dvpg-key' in sg_aggr:
-                        if port['port_desc'].port_group_key != sg_aggr['dvpg-key']:
-                            sg_aggr['ports'].append(port)
-                        # else: port is properly assigned, no need to reassign
-                    else:
-                        sg_aggr['ports'].append(port)
+                    if port['port_desc'].port_group_key != sg_aggr.pg_key:
+                        sg_aggr.ports_to_assign.append(port)
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
-                # Store the first found vlan in the ag_aggr
-                if 'vlan' not in sg_aggr \
-                        and 'vlan' == port.get('network_type', None) \
-                        and port.get('segmentation_id', None):
-                    sg_aggr['vlan'] = port['segmentation_id']
+    def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
+        client_factory = dvs.connection.vim.client.factory
+        builder = sg_util.PortConfigSpecBuilder(client_factory)
+        pg_per_sg = dvs.get_port_group_by_security_group()
+
+        if not sg_aggr.dirty:
+            if sg_aggr.pg_key:
+                self._reassign_ports(sg_aggr)
+            return
+
+        # Mark as processed, might be reset below
+        sg_aggr.dirty = False
+
+        # Prepare a port config
+        sg_set_rules = sg_util.get_rules(sg_aggr)
+        port_config = sg_util.port_configuration(
+                builder, None, sg_set_rules, {}, None, None).setting
+        if sg_aggr.vlan:
+            port_config.vlan = builder.vlan(sg_aggr.vlan)
+
+        pg = pg_per_sg.get(sg_set, None)
+        if pg:
+            sg_aggr.pg_key = pg["key"]
+            if len(sg_set_rules) == 0:
+                LOG.debug("No rules left")
+            else:
+                dvs.update_dvportgroup(pg, port_config)
+            self._reassign_ports(sg_aggr)
+        else:
+            self._create_dvpg_and_update_sg_aggr(dvs,
+                                                 sg_set,
+                                                 port_config,
+                                                 sg_aggr)
 
     @stats.timed()
-    def _apply_changed_sg_aggr(self):
+    def _apply_changed_sg_aggregates(self):
+        pool = self.v_center.pool or GreenPool()
 
-        local_pile = _pile(self.v_center.pool)
-        local_pile.spawn(noop) # See https://github.com/eventlet/eventlet/issues/53
-
-        for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
-
+        def _apply(dvs_uuid, sg_aggregates):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            client_factory = dvs.connection.vim.client.factory
-            builder = sg_util.PortConfigSpecBuilder(client_factory)
-            pg_per_sg = dvs.get_pg_per_sg_attribute(self.v_center.security_groups_attribute_key)
-            obsolete_sg_sets = []
+            apply_on_dvs = partial(self._apply_changed_sg_aggr, dvs)
 
-            for sg_set, sg_aggr in six.iteritems(sg_aggregates):
-                if "dvpg-key" in sg_aggr:
-                    self._reassign_ports(sg_aggr)
+            for result in pool.starmap(apply_on_dvs, six.iteritems(sg_aggregates)):
+                pass
 
-                if not sg_aggr["dirty"]:
-                    continue
-
-                if 'gt' not in sg_aggr:
-                    sg_aggr['gt'] = self._green.spawn(noop)
-
-                # Mark as processed, might be reset bellow
-                sg_aggr["dirty"] = False
-
-                # Prepare a port config
-                sg_set_rules = sg_util.get_rules(sg_aggr)
-                port_config = sg_util.port_configuration(
-                        builder, None, sg_set_rules, {}, None, None).setting
-                if 'vlan' in sg_aggr:
-                    port_config.vlan = builder.vlan(sg_aggr['vlan'])
-
-                if sg_set in pg_per_sg:
-                    pg = pg_per_sg[sg_set]
-                    if len(sg_set_rules) == 0:
-                        if len(pg["vm"]) == 0:
-                            sg_aggr['gt'].link(_delete_dvpg, dvs, pg["ref"], pg["name"], True)
-                            obsolete_sg_sets.append(sg_set)
-                            continue
-                        else:
-                            # Keep the dirty flag, so that we retry deleting it on the next run
-                            sg_aggr["dirty"] = True
-                    else:
-                        sg_aggr['gt'].link(_update_dvpg, dvs, pg["ref"], pg["configVersion"], port_config)
-                    sg_aggr["dvpg-key"] = pg["key"]
-                else:
-                    local_pile.spawn(
-                        self._create_dvpg_and_update_sg_aggr,
-                        dvs,
-                        self.v_center.security_groups_attribute_key,
-                        sg_set,
-                        port_config,
-                        sg_aggr)
-
-            # Release no-longer used sg_aggr objects
-            for obsolete_sg_set in obsolete_sg_sets:
-                del sg_aggregates[obsolete_sg_set]
-
-        # Wait new dvpg creations, necessary for vm reassignments
-        for result in local_pile:
+        for result in pool.starmap(_apply, six.iteritems(self._sg_aggregates_per_dvs_uuid)):
             pass
 
     def _reassign_ports(self, sg_aggr):
         """
         Reassigns VM to a dvportgroup based on its port's security group set
         """
-        ports = sg_aggr.get('ports', None)
+
+        ports = sg_aggr.ports_to_assign
+        sg_aggr.ports_to_assign = []
+
+        if not sg_aggr.vlan and ports:
+            vlan_ids = Counter([ port['segmentation_id']
+                    for port in ports
+                    if 'vlan' == port.get('network_type', None) and port.get('segmentation_id', None) ])
+            sg_aggr.vlan, _ = vlan_ids.most_common(1)[0]
+
         port_keys_to_drop = defaultdict(list)
-        while len(ports) > 0:
-            port = ports.popleft()
+        for port in ports:
             sg_set = sg_util.security_group_set(port)
             if not sg_set:
                 LOG.debug("Port {} has no security group set, skipping reassignment.".format(port['id']))
                 continue
             port_desc = port['port_desc']
-            if port_desc.port_group_key == sg_aggr['dvpg-key']:
+            if port_desc.port_group_key == sg_aggr.pg_key:
                 # Existing ports can enter the reassignment queue
-                # on agent boot before the dvpg-key has been set
+                # on agent boot before the pg_key has been set
                 # on the sg_aggr object. Filter them here.
                 continue
             dvs_uuid = port_desc.dvs_uuid
@@ -223,7 +213,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # Configure the backing to the required dvportgroup
             port_connection = client_factory.create('ns0:DistributedVirtualSwitchPortConnection')
             port_connection.switchUuid = dvs_uuid
-            port_connection.portgroupKey = sg_aggr['dvpg-key']
+            port_connection.portgroupKey = sg_aggr.pg_key
             port_backing = client_factory.create('ns0:VirtualEthernetCardDistributedVirtualPortBackingInfo')
             port_backing.port = port_connection
 
@@ -261,18 +251,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         eventlet.sleep(0) # yield to allow VM network reassignments to take place
 
-    def _create_dvpg_and_update_sg_aggr(self, dvs, sg_attr_key, sg_set, port_config, sg_aggr):
-        pg = dvs.create_dvportgroup(sg_attr_key, sg_set, port_config)
-        sg_aggr["dvpg-key"] = pg["key"]
+    def _create_dvpg_and_update_sg_aggr(self, dvs, sg_set, port_config, sg_aggr):
+        pg = dvs.create_dvportgroup(sg_set, port_config)
+        sg_aggr.pg_key = pg["key"]
         self._reassign_ports(sg_aggr)
-
-def _delete_dvpg(gt, dvs, pg_ref, pg_name, ignore_in_use):
-    """ Delete dvportgroup function for use with greenthreads' link """
-    dvs._delete_port_group(pg_ref, pg_name, ignore_in_use)
-
-def _update_dvpg(gt, dvs, pg_ref, config_version, port_config):
-    """ Update dvportgroup function for use with greenthreads' link """
-    dvs.update_dvportgroup(pg_ref, config_version, port_config)
 
 @stats.timed()
 def reconfig_vm(dvs, vm_ref, vm_config_spec):
@@ -295,10 +277,3 @@ def _ports_by_switch(ports=None):
 
 def noop(*args):
     pass
-
-def _pile(pool=None):
-    if pool:
-        return GreenPile(pool)
-    else:
-        return GreenPile()
-#

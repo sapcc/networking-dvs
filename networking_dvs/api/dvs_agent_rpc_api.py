@@ -15,12 +15,12 @@
 import oslo_messaging
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
+from osprofiler.profiler import trace_cls
 
 from networking_dvs.common import constants as dvs_const
 
 
 class ExtendAPI(object):
-
     def create_network(self, context, current, segment):
         self.create_network_precommit(current, segment)
 
@@ -42,7 +42,7 @@ class ExtendAPI(object):
     def delete_port(self, context, current, original, segment):
         self.delete_port_postcommit(current, original, segment)
 
-
+@trace_cls("rpc")
 class DVSClientAPI(object):
     """Client side RPC interface definition."""
     ver = '1.1'

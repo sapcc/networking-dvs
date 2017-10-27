@@ -42,7 +42,6 @@ from networking_dvs.utils import spec_builder
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
-SECURITY_GROUPS_ATTRIBUTE = "NeutronSecurityGroups"
 
 class RequestCanceledException(exceptions.VimException):
     msg_fmt = _("The task was canceled by a user.")
@@ -460,6 +459,7 @@ class VCenterMonitor(object):
             ))
         port_desc.device_type = value.__class__.__name__
         return port_desc
+
     def _handle_port_update(self, port_desc, now):
         mac_address = port_desc.mac_address
 
@@ -510,67 +510,17 @@ class VCenter(object):
         self.connection = None
         self._monitor_process = VCenterMonitor(self.config, pool=self.pool)
         self.connection = _create_session(self.config)
+        self.builder = SpecBuilder(self.connection.vim.client.factory)
 
         self.uuid_port_map = {}
         self.mac_port_map = {}
 
         self.uuid_dvs_map = {}
+        self.network_dvs_map = {}
 
-        self.security_groups_attribute_key = -1
-
-        for dvs in six.itervalues(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
+        for network, dvs in six.iteritems(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
+            self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
-
-    def setup_security_groups_support(self, reset_state=True):
-        """
-        We will track security groups -> dvportgroup mapping though the use
-        of custom attributes.
-
-        A custom attribute must be defined initially and then queried at
-        start for its id, which is then used to map to a particular value.
-        """
-        service_content = self.connection.vim.retrieve_service_content()
-        custom_field_manager = service_content.customFieldsManager
-
-        result = vim_util.get_object_properties(self.connection.vim,
-                                                custom_field_manager, "field")
-        for field in result[0].propSet[0].val.CustomFieldDef:
-            if SECURITY_GROUPS_ATTRIBUTE == field.name:
-                LOG.debug("Found custom attribute for security groups with key %s", field.key)
-                self.security_groups_attribute_key = field.key
-                break
-        else:
-            LOG.debug("No custom attribute for security groups found, will create one.")
-            field = self.connection.invoke_api(self.connection.vim,
-                                               "AddCustomFieldDef",
-                                               custom_field_manager,
-                                               name=SECURITY_GROUPS_ATTRIBUTE,
-                                               moType="DistributedVirtualPortgroup")
-            LOG.debug("Created custom attribute for security groups with key %s", field.key)
-            self.security_groups_attribute_key = field.key
-
-        if reset_state:
-            wait_pile = False
-            pile = GreenPile(self.pool) if self.pool else GreenPile()
-            # Will drop all security group rules from matching dvportgroups and remove empty portgroups
-            for uuid, dvs in six.iteritems(self.uuid_dvs_map):
-                sg_tagged_pgs = dvs.get_pg_per_sg_attribute(self.security_groups_attribute_key)
-                for sg_set, pg in six.iteritems(sg_tagged_pgs):
-                    wait_pile = True
-                    if len(pg["vm"]) == 0:
-                        pile.spawn(dvs._delete_port_group, pg["ref"], pg["name"], ignore_in_use=True)
-                    else:
-                        port_config = dvs.builder.port_setting()
-                        port_config.blocked = dvs.builder.blocked(False)
-                        port_config.filterPolicy = dvs.builder.filter_policy([], None)
-                        pile.spawn(dvs.update_dvportgroup,
-                                   pg["ref"],
-                                   pg["configVersion"],
-                                   port_config,
-                                   name=dvs.dvportgroup_name(sg_set))
-            if wait_pile:
-                for result in pile:
-                    pass
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -602,14 +552,12 @@ class VCenter(object):
     def bind_ports(self, ports, callback=None):
         ports_by_switch_and_key = self.ports_by_switch_and_key(ports)
 
-        builder = SpecBuilder(self.connection.vim.client.factory)
-
         for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
             specs = []
             for port in six.itervalues(ports_by_key):
                 if (port["network_type"] == "vlan" and not port["segmentation_id"] is None) \
                         or port["network_type"] == "flat":
-                    spec = builder.neutron_to_port_config_spec(port)
+                    spec = self.builder.neutron_to_port_config_spec(port)
                     specs.append(spec)
 
             dvs.queue_update_specs(specs, callback=callback)

@@ -13,9 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from collections import defaultdict
 from time import sleep
 import hashlib
 import re
+import itertools
 import six
 import string
 import uuid
@@ -62,6 +64,60 @@ def wrap_retry(func):
                     raise
     return wrapper
 
+
+def dvportgroup_name(uuid, sg_set):
+    """
+    Returns a dvportgroup name for the particular security group set
+    in the context of the switch of the given uuid
+    """
+    # There is an upper limit on managed object names in vCenter
+    dvs_id = ''.join(uuid.split(' '))[:8]
+    name = sg_set + "-" + dvs_id
+    if len(name) > 80:
+        # so we use a hash of the security group set
+        hex = hashlib.sha224()
+        hex.update(sg_set)
+        name = hex.hexdigest() + "-" + dvs_id
+
+    return name
+
+
+def _config_differs(current, update):
+    if current.__class__ != update.__class__:
+        return True
+
+    for name, value in current:
+        try:
+            new_value = update[name]
+            if not new_value or 'inherited' in new_value and new_value['inherited'] is None:
+                continue
+
+            if isinstance(value, list):
+                if len(value) != len(new_value):
+                    return True
+                for a, b in itertools.izip(value, new_value):
+                    if _config_differs(a, b):
+                        return True
+                continue
+
+            if hasattr(value, '__keylist__'):
+                if _config_differs(value, new_value):
+                    return True
+                else:
+                    continue
+
+            if value != new_value:
+                return True
+        except KeyError:
+            pass
+        except TypeError, e:
+            if value != new_value:
+                LOG.error(name)
+                LOG.error(value)
+                LOG.error(new_value)
+                return False
+    return False
+
 class DVSController(object):
     """Controls one DVS."""
 
@@ -78,12 +134,16 @@ class DVSController(object):
             self.connection.vim.client.factory)
         self.hosts_to_rectify = {}
         self.rectify_wait = rectify_wait
+
         try:
             self._dvs, self._datacenter = self._get_dvs(dvs_name, connection)
             # (SlOPS) To do release blocked port after use
             self._blocked_ports = set()
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
+
+        self._port_groups_by_name = {}
+        self._get_portgroups(refresh=True)
 
     @property
     def uuid(self):
@@ -111,6 +171,7 @@ class DVSController(object):
             raise exceptions.wrap_wmvare_vim_exception(e)
         else:
             pg = result.result
+            self._port_groups_by_name[name] = pg
             LOG.info(_LI('Network %(name)s created \n%(pg_ref)s'),
                      {'name': name, 'pg_ref': pg})
             return pg
@@ -178,19 +239,21 @@ class DVSController(object):
                     pg_ref)
                 self.connection.wait_for_task(pg_delete_task)
                 LOG.info(_LI('Network %(name)s deleted.') % {'name': name})
-                break
+                self._port_groups_by_name.pop(name, None)
+                return True
             except vmware_exceptions.VimException as e:
-                if not ignore_in_use or not re.match("The resource '\d*' is in use.", e.message):
-                    raise exceptions.wrap_wmvare_vim_exception(e)
-                else:
+                if ignore_in_use and 'ResourceInUse' in e.fault_list:
                     LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
-                             % {'name': name, 'message': e.message})
-                    break
+                            % {'name': name, 'message': e.message})
+                    return False
+                else:
+                    raise exceptions.wrap_wmvare_vim_exception(e)
             except vmware_exceptions.VMwareDriverException as e:
                 if dvs_const.DELETED_TEXT in e.message:
-                    sleep(0.1)
+                    return True
                 else:
                     raise
+        return False
 
     def submit_update_ports(self, update_specs):
         return self.connection.invoke_api(
@@ -344,23 +407,21 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
-    def get_pg_per_sg_attribute(self, sg_attr_key, max_objects=100):
+    def get_port_group_by_security_group(self, max_objects=100):
         portgroups = self._get_portgroups(max_objects)
         result = {}
 
-        for dvpg in portgroups:
-            if "customValue" not in dvpg:
-                continue
-
-            if dvpg["customValue"].__class__.__name__ == "ArrayOfCustomFieldValue":
-                for custom_field_value in dvpg["customValue"]["CustomFieldValue"]:
-                    if custom_field_value.key == sg_attr_key:
-                        result[custom_field_value.value] = dvpg
-                        break
+        for dvpg in six.itervalues(portgroups):
+            description = dvpg["description"]
+            if description:
+                result[dvpg["description"]] = dvpg
 
         return result
 
-    def _get_portgroups(self, max_objects=100):
+    def _get_portgroups(self, max_objects=100, refresh=False):
+        if self._port_groups_by_name and not refresh:
+            return self._port_groups_by_name
+
         """Get all portgroups on the switch"""
         vim = self.connection.vim
         property_collector = vim.service_content.propertyCollector
@@ -379,7 +440,7 @@ class DVSController(object):
         property_spec = vim_util.build_property_spec(
                 vim.client.factory,
                 "DistributedVirtualPortgroup",
-                ["key", "name", "config.configVersion", "customValue", "vm"])
+                ["key", "name", "config.description", "config.configVersion", "config.defaultPortConfig"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
                 vim.client.factory,
@@ -390,22 +451,23 @@ class DVSController(object):
 
         pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
                 options=options)
-        result = []
 
         with vim_util.WithRetrieval(vim, pc_result) as pc_objects:
             for objContent in pc_objects:
                 props = {prop.name : prop.val for prop in objContent.propSet}
                 props["ref"] = objContent.obj
-                props["configVersion"] = props["config.configVersion"]
-                result.append(props)
+                props["configVersion"] = int(props.pop("config.configVersion", 0))
+                props["description"] = str(props.pop("config.description", ""))
+                props["defaultPortConfig"] = props.pop("config.defaultPortConfig", None)
+                self._port_groups_by_name[props["name"]] = props
 
-        return result
+        return self._port_groups_by_name
 
     @stats.timed()
-    def create_dvportgroup(self, sg_attr_key, sg_set, port_config):
+    def create_dvportgroup(self, sg_set, port_config, update=True):
         """
         Creates an automatically-named dvportgroup on the dvswitch
-        with the specified sg rules and marks it as such through a custom attribute
+        with the specified sg rules and marks it as such through the description
 
         Returns a dictionary with "key" and "ref" keys.
 
@@ -419,7 +481,15 @@ class DVSController(object):
         # which seems to be part of a non-used call path
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
-        dvpg_name = self.dvportgroup_name(sg_set)
+        dvpg_name = dvportgroup_name(self.uuid, sg_set)
+
+        portgroups = self._get_portgroups()
+        if dvpg_name in portgroups:
+            existing = portgroups[dvpg_name]
+
+            if update:
+                self.update_dvportgroup(existing, port_config)
+            return existing
 
         try:
             pg_spec = self.builder.pg_config(port_config)
@@ -438,94 +508,93 @@ class DVSController(object):
 
             pg_ref = result.result
 
-            # Tag the portgroup for the specific security group set
-            self.connection.invoke_api(
-                self.connection.vim,
-                "SetField",
-                self._service_content.customFieldsManager,
-                entity=pg_ref,
-                key=sg_attr_key,
-                value=sg_set)
-
             props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref, ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
             LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
-            return {"key": props["key"], "ref": pg_ref}
+
+            values = {"key": props["key"],
+                      "ref": pg_ref,
+                      "name": dvpg_name,
+                      "configVersion": 0,
+                      "description": sg_set,
+                      "defaultPortConfig": port_config
+                      }
+            self._port_groups_by_name[dvpg_name] = values
+            return values
         except vmware_exceptions.DuplicateName as dn:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
-            portgroups = self._get_portgroups()
-            for existing in portgroups:
-                if existing['name'] != dvpg_name:
-                    continue
-                break # found it
-            else:
+
+            if dvpg_name not in portgroups:
+                portgroups = self._get_portgroups(refresh=True)
+
+            if dvpg_name not in portgroups:
                 LOG.error("Portgroup with matching name {} not found while expected.".format(dvpg_name))
                 return
 
-            self.update_dvportgroup(existing["ref"], existing["config.configVersion"], port_config)
+            existing = portgroups[dvpg_name]
 
-            # Tag the portgroup for the specific security group set
-            self.connection.invoke_api(
-                self.connection.vim,
-                "SetField",
-                self._service_content.customFieldsManager,
-                entity=existing["ref"],
-                key=sg_attr_key,
-                value=sg_set)
+            if update:
+                self.update_dvportgroup(existing, port_config)
 
             return existing
         except vmware_exceptions.VimException as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
-    def dvportgroup_name(self, sg_set):
-        """
-        Returns a dvportgroup name for the particular security group set
-        in the context of the current switch
-        """
-        # There is an upper limit on managed object names in vCenter
-        dvs_id = ''.join(self.uuid.split(' '))[:8]
-        name = sg_set + "-" + dvs_id
-        if len(name) > 80:
-            # so we use a hash of the security group set
-            hex = hashlib.sha224()
-            hex.update(sg_set)
-            name = hex.hexdigest() + "-" + dvs_id
-
-        return name
-
     @stats.timed()
-    def update_dvportgroup(self, pg_ref, config_version, port_config=None, name=None, retries=3):
-        if retries <= 0:
-            LOG.error("Maximum number of update retries reached for portgroup {}.".format(pg_ref.value))
-            return
-        try:
-            pg_spec = self.builder.pg_config(port_config)
-            pg_spec.configVersion = config_version
-            if name:
-                pg_spec.name = name
+    def update_dvportgroup(self, pg, port_config=None, name=None, retries=3):
+        for ntry in six.moves.xrange(retries):
+            pg_ref = pg["ref"]
+            name = name or pg.get("name")
+            if not name:
+                LOG.debug("Missing name for %s", pg_ref.value)
 
-            now = timeutils.utcnow()
-            pg_update_task = self.connection.invoke_api(
-                self.connection.vim,
-                'ReconfigureDVPortgroup_Task',
-                pg_ref, spec=pg_spec)
+            default_port_config = pg.get("defaultPortConfig")
 
-            self.connection.wait_for_task(pg_update_task)
-            delta = timeutils.utcnow() - now
-            stats.timing('networking_dvs.dvportgroup.updated', delta)
-            LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
-        except vmware_exceptions.VimException as e:
-            if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
-                LOG.debug("Concurrent modification detected, will retry.")
-                config_version = vim_util.get_object_property(
-                    self.connection.vim, pg_ref, "config.configVersion")
-                return self.update_dvportgroup(pg_ref, config_version, port_config, name, retries-1)
-            if dvs_const.BULK_FAULT_TEXT in str(e):
-                info = get_task_info(self.connection, pg_update_task)
-                self.rectifyForFault(info.error.fault)
+            if name == pg.get("name") \
+                    and (default_port_config or not port_config) \
+                    and not _config_differs(default_port_config, port_config):
+                LOG.debug("Skipping update: No changes to known config on %s", (name))
                 return
-            raise exceptions.wrap_wmvare_vim_exception(e)
+
+            try:
+                pg_spec = self.builder.pg_config(port_config)
+                pg_spec.configVersion = str(pg["configVersion"])
+                if name and name != pg["name"]:
+                    pg_spec.name = name
+
+                now = timeutils.utcnow()
+                pg_update_task = self.connection.invoke_api(
+                    self.connection.vim,
+                    'ReconfigureDVPortgroup_Task',
+                    pg_ref, spec=pg_spec)
+
+                pg["configVersion"] += 1
+                pg["defaultPortConfig"] = port_config
+
+                self.connection.wait_for_task(pg_update_task)
+
+                delta = timeutils.utcnow() - now
+                stats.timing('networking_dvs.dvportgroup.updated', delta)
+
+                LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
+                return
+            except vmware_exceptions.VimException as e:
+                if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e) \
+                        and ntry != retries-1:
+                    LOG.debug("Concurrent modification detected, will retry.")
+                    ## TODO A proper read-out of the current config
+                    config_version = vim_util.get_object_property(
+                        self.connection.vim, pg_ref, "config.configVersion")
+
+                    continue
+
+                if dvs_const.BULK_FAULT_TEXT in str(e):
+                    info = get_task_info(self.connection, pg_update_task)
+                    self.rectifyForFault(info.error.fault)
+                    return
+                raise exceptions.wrap_wmvare_vim_exception(e)
+
 
     def rectifyForFault(self, fault):
         """
@@ -542,7 +611,7 @@ class DVSController(object):
                     self.hosts_to_rectify[host_ref] = time.time()
                     hosts.add(host_ref)
                 else:
-                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref))
+                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref.value))
             else:
                 self.hosts_to_rectify[host_ref] = time.time()
                 hosts.add(host_ref)
@@ -724,18 +793,19 @@ class DVSController(object):
                 if obj.obj._type == 'Datacenter':
                     return obj.obj
 
-    def _get_pg_by_name(self, pg_name):
+    def _get_pg_by_name(self, pg_name, refresh_if_missing=True):
         """Get the dpg ref by name"""
-        for pg in self._get_all_port_groups():
+        try:
+            return self._port_groups_by_name[pg_name]["ref"]
+        except KeyError:
+            if not refresh_if_missing:
+                raise exceptions.PortGroupNotFound(pg_name=pg_name)
+
+            self._get_portgroups(refresh=True)
             try:
-                name = self.connection.invoke_api(
-                    vim_util, 'get_object_property',
-                    self.connection.vim, pg, 'name')
-                if pg_name == name:
-                    return pg
-            except vmware_exceptions.VimException:
-                pass
-        raise exceptions.PortGroupNotFound(pg_name=pg_name)
+                return self._port_groups_by_name[pg_name]["ref"]
+            except KeyError:
+                raise exceptions.PortGroupNotFound(pg_name=pg_name)
 
     def _get_all_port_groups(self):
         net_list = self.connection.invoke_api(
@@ -892,13 +962,13 @@ def connect(config, **kwds):
     return connection
 
 
-def create_network_map_from_config(config, connection=None, pool=None):
+def create_network_map_from_config(config, connection=None, **kwargs):
     """Creates physical network to dvs map from config"""
     connection = connection or connect(config)
     network_map = {}
     for network, dvs in six.iteritems(neutron_utils.parse_mappings(config.network_maps)):
-        network_map[network] = DVSController(dvs, connection=connection, pool=pool,
-                                             rectify_wait=config.host_rectify_timeout)
+        network_map[network] = DVSController(dvs, connection=connection,
+                                             rectify_wait=config.host_rectify_timeout, **kwargs)
     return network_map
 
 
