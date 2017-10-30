@@ -233,7 +233,7 @@ class SpecBuilder(spec_builder.SpecBuilder):
 
 
 class VCenterMonitor(object):
-    def __init__(self, config, queue=None, quit_event=None, error_queue=None, pool=None):
+    def __init__(self, config, connection=None, queue=None, quit_event=None, error_queue=None, pool=None):
         self._quit_event = quit_event or Event()
         self.changed = set()
         self.queue = queue or Queue()
@@ -242,7 +242,7 @@ class VCenterMonitor(object):
         self.down_ports = {}
         self.untried_ports = {} # The host is simply down
         self.iteration = 0
-        self.connection = None
+        self.connection = connection
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
@@ -266,7 +266,7 @@ class VCenterMonitor(object):
     def _run(self, config):
         LOG.info(_LI("Monitor running... "))
         try:
-            self.connection = _create_session(config)
+            self.connection = self.connection or _create_session(config)
             connection = self.connection
             vim = connection.vim
             builder = SpecBuilder(vim.client.factory)
@@ -507,9 +507,8 @@ class VCenter(object):
     def __init__(self, config=None, pool=None):
         self.pool = pool
         self.config = config or CONF.ML2_VMWARE
-        self.connection = None
-        self._monitor_process = VCenterMonitor(self.config, pool=self.pool)
         self.connection = _create_session(self.config)
+        self._monitor_process = VCenterMonitor(self.config, connection=self.connection, pool=self.pool)
         self.builder = SpecBuilder(self.connection.vim.client.factory)
 
         self.uuid_port_map = {}
