@@ -24,8 +24,6 @@ from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
-def _uncurry(_, f, *args, **keywords):
-    return f(*args, **keywords)
 
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
@@ -35,7 +33,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._green = self.v_center.pool or eventlet
 
     def prepare_port_filter(self, ports):
-        # LOG.debug("prepare_port_filter called with %s", pprint.pformat(ports))
+        # LOG.debug("prepare_port_filter called with %s", ports)
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
         self._process_ports(merged_ports)
@@ -46,7 +44,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         pass
 
     def update_port_filter(self, ports):
-        # LOG.debug("update_port_filter called with %s", pprint.pformat(ports))
+        # LOG.debug("update_port_filter called with %s", ports)
         ports_to_remove = [self._ports_by_device_id[port['device']]
                            for port in ports
                            if port['device'] in self._ports_by_device_id]
@@ -59,7 +57,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._apply_changed_sg_aggregates()
 
     def remove_port_filter(self, port_ids):
-        # LOG.debug("remote_port_filter called for %s", pprint.pformat(port_ids))
+        # LOG.debug("remote_port_filter called for %s", port_ids)
         ports_to_remove = [self._ports_by_device_id[port_id]
                            for port_id in port_ids
                            if port_id in self._ports_by_device_id]
@@ -91,10 +89,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = []
         for port in ports: # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
-            vcenter_port = copy.deepcopy(self.v_center.uuid_port_map.get(port_id, None))
+            vcenter_port = self.v_center.uuid_port_map.get(port_id, None)
             if vcenter_port:
-                dict_merge(vcenter_port, port)
-                merged_ports.append(vcenter_port)
+                dict_merge(port, vcenter_port)
+                merged_ports.append(port)
             else:
                 LOG.error(_LE("Unknown port {}").format(port_id))
         return merged_ports
