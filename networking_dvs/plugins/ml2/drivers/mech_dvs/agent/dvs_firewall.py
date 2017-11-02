@@ -29,7 +29,7 @@ def _uncurry(_, f, *args, **keywords):
 
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
-        self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(self.conf.ML2_VMWARE)
+        self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(CONF.ml2_vmware)
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(sg_util.SgAggr))
         self._green = self.v_center.pool or eventlet
@@ -151,6 +151,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 builder, None, sg_set_rules, {}, None, None).setting
         if sg_aggr.vlan:
             port_config.vlan = builder.vlan(sg_aggr.vlan)
+
+        sg_tags=['security_group:' + sg_set, 'host:' + CONF.host]
+        stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
         pg = pg_per_sg.get(sg_set, None)
         if pg:
