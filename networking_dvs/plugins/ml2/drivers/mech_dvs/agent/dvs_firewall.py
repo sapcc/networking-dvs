@@ -89,10 +89,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = []
         for port in ports: # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
-            vcenter_port = self.v_center.uuid_port_map.get(port_id, None)
+            vcenter_port = copy.deepcopy(self.v_center.uuid_port_map.get(port_id, None))
             if vcenter_port:
-                dict_merge(port, vcenter_port)
-                merged_ports.append(port)
+                dict_merge(vcenter_port, port)
+                merged_ports.append(vcenter_port)
             else:
                 LOG.error(_LE("Unknown port {}").format(port_id))
         return merged_ports
