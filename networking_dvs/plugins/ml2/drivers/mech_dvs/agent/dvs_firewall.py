@@ -30,7 +30,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(CONF.ml2_vmware)
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(sg_util.SgAggr))
-        self._green = self.v_center.pool or eventlet
+        self._green = self.v_center.pool or GreenPool()
 
     def prepare_port_filter(self, ports):
         # LOG.debug("prepare_port_filter called with %s", ports)
@@ -145,8 +145,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         # Prepare a port config
         sg_set_rules = sg_util.get_rules(sg_aggr)
-        port_config = sg_util.port_configuration(
-                builder, None, sg_set_rules, {}, None, None).setting
+
+        port_config = builder.port_setting()
+        port_config.filterPolicy = sg_util.filter_policy(builder, sg_rules=sg_set_rules)
         if sg_aggr.vlan:
             port_config.vlan = builder.vlan(sg_aggr.vlan)
 
@@ -169,22 +170,23 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @stats.timed()
     def _apply_changed_sg_aggregates(self):
-        pool = self.v_center.pool or GreenPool()
-
         def _apply(dvs_uuid, sg_aggregates):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
             apply_on_dvs = partial(self._apply_changed_sg_aggr, dvs)
 
-            for result in pool.starmap(apply_on_dvs, six.iteritems(sg_aggregates)):
+            for result in self._green.starmap(apply_on_dvs, six.iteritems(sg_aggregates)):
                 pass
 
-        for result in pool.starmap(_apply, six.iteritems(self._sg_aggregates_per_dvs_uuid)):
+        for result in self._green.starmap(_apply, six.iteritems(self._sg_aggregates_per_dvs_uuid)):
             pass
 
     def _reassign_ports(self, sg_aggr):
         """
         Reassigns VM to a dvportgroup based on its port's security group set
         """
+
+        if not sg_aggr.ports_to_assign:
+            return
 
         ports = sg_aggr.ports_to_assign
         sg_aggr.ports_to_assign = []

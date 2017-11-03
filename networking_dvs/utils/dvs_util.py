@@ -86,15 +86,24 @@ def _config_differs(current, update):
     if current.__class__ != update.__class__:
         return True
 
+    # Technically, that is the case, but we have practically only
+    # missing entries, because we do not get the default values from the api,
+    # but the constructor sets them
+    # missing = set(update.__keylist__) - set(current.__keylist__)
+    # if missing:
+    #     return True
+
     for name, value in current:
         try:
             new_value = update[name]
+
             if not new_value or 'inherited' in new_value and new_value['inherited'] is None:
                 continue
 
             if isinstance(value, list):
                 if len(value) != len(new_value):
                     return True
+
                 for a, b in itertools.izip(value, new_value):
                     if _config_differs(a, b):
                         return True
@@ -112,10 +121,12 @@ def _config_differs(current, update):
             pass
         except TypeError, e:
             if value != new_value:
+                LOG.error(e)
                 LOG.error(name)
                 LOG.error(value)
                 LOG.error(new_value)
                 return False
+
     return False
 
 class DVSController(object):
@@ -546,6 +557,7 @@ class DVSController(object):
         for ntry in six.moves.xrange(retries):
             pg_ref = pg["ref"]
             name = name or pg.get("name")
+
             if not name:
                 LOG.debug("Missing name for %s", pg_ref.value)
 
@@ -584,8 +596,10 @@ class DVSController(object):
                         and ntry != retries-1:
                     LOG.debug("Concurrent modification detected, will retry.")
                     ## TODO A proper read-out of the current config
-                    config_version = vim_util.get_object_property(
-                        self.connection.vim, pg_ref, "config.configVersion")
+                    props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref,
+                                                                ["config.configVersion", "config.defaultPortConfig"])
+                    pg["configVersion"] = int(props["config.configVersion"])
+                    pg["defaultPortConfig"] = props["config.defaultPortConfig"]
 
                     continue
 
