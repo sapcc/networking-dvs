@@ -15,12 +15,13 @@
 
 import abc
 import attr
+import bisect
 import copy
 import six
 import string
 
 from collections import defaultdict
-
+from ipaddress import ip_network, collapse_addresses
 from oslo_log import log
 
 from neutron.i18n import _LI
@@ -30,6 +31,20 @@ from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
 
+try:
+    from attr.converters import optional as _optional
+except ImportError:
+    def _optional(converter):
+        def wrap(value):
+            if value is None:
+                return None
+            return converter(value)
+        return wrap
+
+_ANY_IPS = {
+    'IPv4': ip_network(u'0.0.0.0/0'),
+    'IPv6': ip_network(u'::/0')
+    }
 
 @attr.s(cmp=True, hash=True)
 class Rule(object):
@@ -37,13 +52,27 @@ class Rule(object):
     ethertype = attr.ib(default=None)
     protocol = attr.ib(default=None)
 
-    dest_ip_prefix = attr.ib(default=None)
+    dest_ip_prefix = attr.ib(default=None, convert=_optional(ip_network))
     port_range_min = attr.ib(default=0, convert=int)
     port_range_max = attr.ib(default=0, convert=int)
 
-    source_ip_prefix = attr.ib(default=None)
+    source_ip_prefix = attr.ib(default=None, convert=_optional(ip_network))
     source_port_range_min = attr.ib(default=0, convert=int)
     source_port_range_max = attr.ib(default=0, convert=int)
+
+    @property
+    def ip_prefix(self):
+        if self.direction == 'ingress':
+            return self.source_ip_prefix
+        else:
+            return self.dest_ip_prefix
+
+    @ip_prefix.setter
+    def ip_prefix(self, value):
+        if self.direction == 'ingress':
+            self.source_ip_prefix = value
+        else:
+            self.dest_ip_prefix = value
 
 
 @attr.s(cmp=True, hash=True)
@@ -65,7 +94,6 @@ class PortConfigSpecBuilder(spec_builder.SpecBuilder):
     def create_spec(self, spec_type):
         return self.factory.create(spec_type)
 
-
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):
     action = 'ns0:DvsAcceptNetworkRuleAction'
@@ -85,8 +113,7 @@ class TrafficRuleBuilder(object):
 
         self.ethertype = ethertype
         if ethertype:
-            any_ip = '0.0.0.0/0' if ethertype == 'IPv4' else '::/0'
-            self.cidr = any_ip
+            self.cidr = _ANY_IPS[ethertype]
 
         self.protocol = protocol
         if protocol:
@@ -104,7 +131,7 @@ class TrafficRuleBuilder(object):
         if cidr_bool:
             rule.cidr = self.cidr
         else:
-            rule.cidr = '0.0.0.0/0'
+            rule.cidr = _ANY_IPS[self.ethertype]
         rule.port_range = self.backward_port_range
         rule.backward_port_range = self.port_range
         return rule
@@ -149,25 +176,13 @@ class TrafficRuleBuilder(object):
         if not cidr:
             return None
 
-        if ethertype == 'IPv4':
-            whole_net = 32
-        else:
-            whole_net = 128
-
-        try:
-            ip, mask = cidr.split('/')
-            mask = int(mask)
-        except ValueError:
-            ip = cidr
-            mask = whole_net
-
-        if mask < whole_net:
+        if cidr.prefixlen < cidr.max_prefixlen:
             result = self.spec_builder.create_spec('ns0:IpRange')
-            result.addressPrefix = ip
-            result.prefixLength = mask
+            result.addressPrefix = str(cidr.network_address)
+            result.prefixLength = cidr.prefixlen
         else:
             result = self.spec_builder.create_spec('ns0:SingleIp')
-            result.address = ip
+            result.address = str(cidr.network_address)
 
         return result
 
@@ -371,6 +386,11 @@ def _patch_sg_rules(security_group_rules):
         rule.pop('security_group_id', None)
         rule.pop('remote_group_id', None)
 
+        if rule.get('direction') == 'egress' \
+            and rule.get('ethertype') in ['IPv4', 'IPv6'] \
+                and  rule.get('dest_ip_prefix') is None:
+            rule['dest_ip_prefix'] = _ANY_IPS[rule.get('ethertype')]
+
         if 'protocol' in rule:
             patched_rules.append(Rule(**rule))
         else:
@@ -420,9 +440,32 @@ def apply_rules(rules, sg_aggr, decrement=False):
             sg_aggr.rules[rule] = 1
             sg_aggr.dirty = True
 
+def _consolidate(rules):
+    grouped = defaultdict(list)
+    for rule in rules:
+        id_ = (rule.direction, rule.ethertype, rule.protocol, rule.port_range_min, rule.port_range_max, rule.source_port_range_min, rule.source_port_range_max)
+        grouped[id_].append(rule)
+
+    for rule_set, rules in six.iteritems(grouped):
+        collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules]))
+
+        for rule in rules:
+            ip_prefix = rule.ip_prefix
+            idx = bisect.bisect(collapsed, ip_prefix) - 1
+            collapsed_address = collapsed[idx]
+            if collapsed_address == ip_prefix:
+                yield rule
+            elif ip_prefix.network_address == collapsed_address.network_address:
+                new_rule = copy.copy(rule)
+                new_rule.ip_prefix = collapsed_address
+                yield new_rule
+            else:
+                # Dropping rule, as it is handled by the case before
+                pass
+
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
-    return sorted(six.iterkeys(sg_aggr.rules))
+    return sorted(_consolidate(six.iterkeys(sg_aggr.rules)))
 
