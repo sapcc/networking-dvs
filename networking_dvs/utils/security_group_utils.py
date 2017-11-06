@@ -52,11 +52,11 @@ class Rule(object):
     ethertype = attr.ib(default=None)
     protocol = attr.ib(default=None)
 
-    dest_ip_prefix = attr.ib(default=None, convert=_optional(ip_network))
+    dest_ip_prefix = attr.ib(default=None, convert=_optional(lambda x: ip_network(x, strict=False)))
     port_range_min = attr.ib(default=0, convert=int)
     port_range_max = attr.ib(default=0, convert=int)
 
-    source_ip_prefix = attr.ib(default=None, convert=_optional(ip_network))
+    source_ip_prefix = attr.ib(default=None, convert=_optional(lambda x: ip_network(x, strict=False)))
     source_port_range_min = attr.ib(default=0, convert=int)
     source_port_range_max = attr.ib(default=0, convert=int)
 
