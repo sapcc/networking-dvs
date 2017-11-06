@@ -84,7 +84,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             'topic': n_const.L2_AGENT_TOPIC,
             'configurations': {
                 'network_maps': network_maps,
-                'network_maps_v2': network_maps_v2,
+                'network_maps_v2': network_maps,
             },
             'agent_type': dvs_const.AGENT_TYPE_DVS,
             'start_flag': True}
@@ -131,7 +131,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.connection.consume_in_threads()
 
     def book_port(self, port, network_segments, network_current):
-        # LOG.debug("{} {} {}".format(port, network_segments, network_current))
+        LOG.debug("{} {} {}".format(port, network_segments, network_current))
         dvs = None
         dvs_segment = None
         for segment in network_segments:
@@ -157,6 +157,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         pg = dvs.create_dvportgroup(sg_set, port_config, update=False)
 
         if not pg:
+            LOG.warning("Failed to create port-group")
             return None
 
         return {"bridge_name": pg["name"]}
