@@ -31,7 +31,8 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import timeutils
-from osprofiler.profiler import trace_cls
+from oslo_utils import uuidutils
+from osprofiler.profiler import trace_cls, init as profiler_init, _clean as profiler_clean
 
 import neutron.context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
@@ -54,12 +55,25 @@ def touch_file(fname, times=None):
     with open(fname, 'a'):
         os.utime(fname, times)
 
+def _touch_fw_timestamp(ports, now=None):
+    """ Set a timestamp on the ports to measure firewall latency """
+    if not ports or len(ports) == 0:
+        return
+    now = now or timeutils.utcnow()
+    for port in ports:
+        port_desc = port.get('port_desc', None)
+        if not port_desc:
+            LOG.debug("Port {} has no description object.".format(port['id']))
+            continue
+        port_desc.firewall_start = now
+
+
 @trace_cls("rpc")
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
 
 
-@trace_cls("rpc")
+@trace_cls("rpc", trace_private=True)
 class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                       dvs_agent_rpc_api.ExtendAPI):
     target = oslo_messaging.Target(version='1.4')
@@ -255,7 +269,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
     @stats.timed()
     def _scan_ports(self):
         try:
-            ports_by_mac = self.api.get_new_ports(block=False, max_ports=10)
+            ports_by_mac = self.api.get_new_ports(block=False, max_ports=self.conf.DVS.max_ports_per_iteration)
             LOG.debug(_LI("Got {} ports".format(len(ports_by_mac))))
             if ports_by_mac:
                 update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
@@ -427,8 +441,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             added_ports -= six.viewkeys(self.unbound_ports)
             updated_ports = six.viewkeys(updated_ports) - added_ports
             now = timeutils.utcnow()
-            self._touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in added_ports], now)
-            self._touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in updated_ports], now)
+            _touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in added_ports], now)
+            _touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in updated_ports], now)
             self.sg_agent.setup_port_filters(added_ports, updated_ports)
 
         # Apply the changes
@@ -450,22 +464,25 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                                                       self.agent_id, self.conf.host))
             self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
 
-    def _touch_fw_timestamp(self, ports, now=None):
-        """ Set a timestamp on the ports to measure firewall latency """
-        if not ports or len(ports) == 0:
-            return
-        now = now or timeutils.utcnow()
-        for port in ports:
-            port_desc = port.get('port_desc', None)
-            if not port_desc:
-                LOG.debug("Port {} has no description object.".format(port['id']))
-                continue
-            port_desc.firewall_start = now
-
     def rpc_loop(self):
+        eventlet.sleep(0)
+
         while self._check_and_handle_signal():
+            trace_step = self.conf.profiler.enabled \
+                and self.conf.DVS.trace_every_nth_iteration > 0 \
+                    and self.iter_num % self.conf.DVS.trace_every_nth_iteration == 0
+
+            if trace_step:
+                base_id = uuidutils.generate_uuid()
+                LOG.info("Starting trace %s", base_id)
+                profiler_init(self.conf.profiler.hmac_keys[0], base_id=base_id)
+
             with timeutils.StopWatch() as w:
                 self.process_ports()
+
+            if trace_step:
+                profiler_clean()
+
             self.loop_count_and_wait(w.elapsed())
 
     def daemon_loop(self):
@@ -474,6 +491,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         if hasattr(signal, 'SIGHUP'):
             signal.signal(signal.SIGHUP, self._handle_sighup)
+
+        self.api.start()
 
         self.rpc_loop()
         if self.api:

@@ -34,6 +34,7 @@ from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_utils import timeutils
 from oslo_vmware import vim_util, exceptions
+from osprofiler.profiler import trace_cls
 
 from networking_dvs.common import config as dvs_config, util as c_util
 from networking_dvs.utils import dvs_util
@@ -247,8 +248,12 @@ class VCenterMonitor(object):
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
         # super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
-        pool = pool or eventlet
-        self.thread = pool.spawn(self._run_safe, config)
+        self.pool = pool or eventlet
+        self.config = config
+        self.thread = None
+
+    def start(self):
+        self.thread = self.pool.spawn(self._run_safe)
 
     def stop(self):
         try:
@@ -263,10 +268,10 @@ class VCenterMonitor(object):
             except exceptions.VimException:
                 pass
 
-    def _run(self, config):
+    def _run(self):
         LOG.info(_LI("Monitor running... "))
         try:
-            self.connection = self.connection or _create_session(config)
+            self.connection = self.connection or _create_session(self.config)
             connection = self.connection
             vim = connection.vim
             builder = SpecBuilder(vim.client.factory)
@@ -275,7 +280,7 @@ class VCenterMonitor(object):
             wait_options = builder.wait_options(60, 20)
 
             self.property_collector = self._create_property_collector()
-            self._create_property_filter(self.property_collector, config)
+            self._create_property_filter(self.property_collector)
 
             while not self._quit_event.ready():
                 result = connection.invoke_api(vim, 'WaitForUpdatesEx', self.property_collector,
@@ -306,28 +311,28 @@ class VCenterMonitor(object):
             if self.connection:
                 self.connection.logout
 
-    def _run_safe(self, config):
+    def _run_safe(self):
         while not self._quit_event.ready():
             try:
-                self._run(config)
+                self._run()
             except:
                 import traceback
                 LOG.error(traceback.format_exc())
                 os._exit(1)
 
-    def _create_property_filter(self, property_collector, config):
+    def _create_property_filter(self, property_collector):
         connection = self.connection
         vim = connection.vim
         service_content = vim.service_content
         client_factory = vim.client.factory
 
-        if not config.cluster_name:
+        if not self.config.cluster_name:
             LOG.info("No cluster specified")
             container = service_content.rootFolder
         else:
-            container = get_cluster_ref_by_name(connection, config.cluster_name)
+            container = get_cluster_ref_by_name(connection, self.config.cluster_name)
             if not container:
-                LOG.error(_LE("Cannot find cluster with name '{}'").format(config.cluster_name))
+                LOG.error(_LE("Cannot find cluster with name '{}'").format(self.config.cluster_name))
                 exit(2)
 
         container_view = connection.invoke_api(vim, 'CreateContainerView', service_content.viewManager,
@@ -496,7 +501,7 @@ class VCenterMonitor(object):
                 continue
             break
 
-
+@trace_cls("vmwareapi")
 class VCenter(object):
     # PropertyCollector discovers changes on vms and their hardware and produces
     #    (mac, switch, portKey, portGroupKey, connectable.connected, connectable.status)
@@ -520,6 +525,9 @@ class VCenter(object):
         for network, dvs in six.iteritems(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
+
+    def start(self):
+        self._monitor_process.start()
 
     @staticmethod
     def update_port_desc(port, port_info):
@@ -647,6 +655,7 @@ def main():
     loop.start(1.0)
 
     util = VCenter(pool=pool)
+    util.start()
 
     with timeutils.StopWatch() as w:
         ports = util.get_new_ports(True, 10.0)

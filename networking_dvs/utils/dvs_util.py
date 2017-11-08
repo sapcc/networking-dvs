@@ -30,6 +30,7 @@ from oslo_utils import timeutils
 from oslo_vmware import api
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
+from osprofiler.profiler import trace_cls
 from requests.exceptions import ConnectionError
 
 from networking_dvs.common import constants as dvs_const
@@ -129,6 +130,7 @@ def _config_differs(current, update):
 
     return False
 
+@trace_cls("vmwareapi")
 class DVSController(object):
     """Controls one DVS."""
 

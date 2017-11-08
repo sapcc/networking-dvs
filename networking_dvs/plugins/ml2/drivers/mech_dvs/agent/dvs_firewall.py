@@ -15,6 +15,7 @@ from neutron.i18n import _LE, _LW, _LI
 from oslo_log import log as logging
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
+from osprofiler.profiler import trace_cls
 from networking_dvs.common import config
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 from networking_dvs.common.util import dict_merge, stats
@@ -24,10 +25,15 @@ from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
-
+@trace_cls("driver")
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
-        self.v_center = integration_bridge if isinstance(integration_bridge, VCenter) else VCenter(CONF.ml2_vmware)
+        if isinstance(integration_bridge, VCenter):
+            self.v_center = integration_bridge
+        else:
+            self.v_center = VCenter(CONF.ml2_vmware)
+            self.v_center.start()
+
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
         self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(sg_util.SgAggr))
         self._green = self.v_center.pool or GreenPool()
