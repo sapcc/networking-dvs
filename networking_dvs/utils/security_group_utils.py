@@ -447,10 +447,12 @@ def _consolidate(rules):
         grouped[id_].append(rule)
 
     for rule_set, rules in six.iteritems(grouped):
-        collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules]))
+        collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules if rule.ip_prefix]))
 
         for rule in rules:
             ip_prefix = rule.ip_prefix
+            if not ip_prefix:
+                yield rule
             idx = bisect.bisect(collapsed, ip_prefix) - 1
             collapsed_address = collapsed[idx]
             if collapsed_address == ip_prefix:
