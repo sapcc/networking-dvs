@@ -302,6 +302,7 @@ class VCenterMonitor(object):
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     if port_desc.status != 'untried' or 0 == self.iteration - iteration:
                         LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+                eventlet.sleep(0)
         except RequestCanceledException, e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():

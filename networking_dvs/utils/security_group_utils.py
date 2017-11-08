@@ -450,20 +450,23 @@ def _consolidate(rules):
         collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules if rule.ip_prefix]))
 
         for rule in rules:
-            ip_prefix = rule.ip_prefix
-            if not ip_prefix:
+            try:
+                ip_prefix = rule.ip_prefix
+                if not ip_prefix:
+                    yield rule
+                idx = bisect.bisect(collapsed, ip_prefix) - 1
+                collapsed_address = collapsed[idx]
+                if collapsed_address == ip_prefix:
+                    yield rule
+                elif ip_prefix.network_address == collapsed_address.network_address:
+                    new_rule = copy.copy(rule)
+                    new_rule.ip_prefix = collapsed_address
+                    yield new_rule
+                else:
+                    # Dropping rule, as it is handled by the case before
+                    pass
+            except IndexError:
                 yield rule
-            idx = bisect.bisect(collapsed, ip_prefix) - 1
-            collapsed_address = collapsed[idx]
-            if collapsed_address == ip_prefix:
-                yield rule
-            elif ip_prefix.network_address == collapsed_address.network_address:
-                new_rule = copy.copy(rule)
-                new_rule.ip_prefix = collapsed_address
-                yield new_rule
-            else:
-                # Dropping rule, as it is handled by the case before
-                pass
 
 def get_rules(sg_aggr):
     """
