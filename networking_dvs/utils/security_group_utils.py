@@ -456,7 +456,7 @@ def _consolidate(rules):
                     yield rule
                 idx = bisect.bisect(collapsed, ip_prefix) - 1
                 collapsed_address = collapsed[idx]
-                if collapsed_address == ip_prefix:
+                if not collapsed_address or collapsed_address == ip_prefix:
                     yield rule
                 elif ip_prefix.network_address == collapsed_address.network_address:
                     new_rule = copy.copy(rule)
