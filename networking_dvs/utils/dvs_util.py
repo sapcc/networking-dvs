@@ -627,7 +627,7 @@ class DVSController(object):
                     self.hosts_to_rectify[host_ref] = time.time()
                     hosts.add(host_ref)
                 else:
-                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref.value))
+                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref))
             else:
                 self.hosts_to_rectify[host_ref] = time.time()
                 hosts.add(host_ref)
