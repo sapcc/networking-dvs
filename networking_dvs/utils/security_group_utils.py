@@ -180,7 +180,12 @@ class TrafficRuleBuilder(object):
         if not cidr:
             return None
 
-        if cidr.prefixlen < cidr.max_prefixlen:
+        if cidr.prefixlen <= 0:
+            cidr = _ANY_IPS[self.ethertype]
+            result = self.spec_builder.create_spec('ns0:IpRange')
+            result.addressPrefix = str(cidr.network_address)
+            result.prefixLength = '0' # Not just zero, because it evaluates to false and will be dropped
+        elif cidr.prefixlen < cidr.max_prefixlen:
             result = self.spec_builder.create_spec('ns0:IpRange')
             result.addressPrefix = str(cidr.network_address)
             result.prefixLength = cidr.prefixlen
