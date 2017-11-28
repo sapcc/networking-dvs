@@ -42,11 +42,13 @@ LOG = log.getLogger(__name__)
 
 INIT_PG_PORTS_COUNT = 4
 
+
 def wrap_retry(func):
     """
     Retry operation on dvs when concurrent modification by another operation
     was discovered
     """
+
     @six.wraps(func)
     def wrapper(*args, **kwargs):
         login_failures = 0
@@ -58,11 +60,12 @@ def wrap_retry(func):
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
                     continue
                 elif (dvs_const.LOGIN_PROBLEM_TEXT in str(e) and
-                        login_failures < dvs_const.LOGIN_RETRIES - 1):
+                              login_failures < dvs_const.LOGIN_RETRIES - 1):
                     login_failures += 1
                     continue
                 else:
                     raise
+
     return wrapper
 
 
@@ -130,6 +133,7 @@ def _config_differs(current, update):
 
     return False
 
+
 @trace_cls("vmwareapi")
 class DVSController(object):
     """Controls one DVS."""
@@ -162,7 +166,8 @@ class DVSController(object):
     def uuid(self):
         if self._uuid:
             return self._uuid
-        self._uuid = self._uuid = self.connection.invoke_api(vim_util, 'get_object_property', self.connection.vim, self._dvs, 'uuid')
+        self._uuid = self._uuid = self.connection.invoke_api(vim_util, 'get_object_property', self.connection.vim,
+                                                             self._dvs, 'uuid')
         return self._uuid
 
     def create_network(self, network, segment):
@@ -242,6 +247,7 @@ class DVSController(object):
                 except vmware_exceptions.VMwareDriverException as e:
                     if dvs_const.DELETED_TEXT in e.message:
                         pass
+
     @stats.timed()
     def _delete_port_group(self, pg_ref, name, ignore_in_use=False):
         while True:
@@ -257,7 +263,7 @@ class DVSController(object):
             except vmware_exceptions.VimException as e:
                 if ignore_in_use and 'ResourceInUse' in e.fault_list:
                     LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
-                            % {'name': name, 'message': e.message})
+                             % {'name': name, 'message': e.message})
                     return False
                 else:
                     raise exceptions.wrap_wmvare_vim_exception(e)
@@ -276,7 +282,8 @@ class DVSController(object):
     def update_ports(self, update_specs):
         if not update_specs:
             return
-        LOG.debug("Update Ports: {} {}".format(update_specs[0].setting.filterPolicy.inherited, sorted([spec.key for spec in update_specs])))
+        LOG.debug("Update Ports: {} {}".format(update_specs[0].setting.filterPolicy.inherited,
+                                               sorted([spec.key for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         try:
             return self.connection.wait_for_task(update_task)  # -> May raise DvsOperationBulkFault, when host is down
@@ -309,10 +316,10 @@ class DVSController(object):
                 pass
             if countdown <= 0:
                 last = i + 1
-                yield(specs[first:last])
+                yield (specs[first:last])
                 countdown = limit
                 first = last
-        yield(specs[first:])
+        yield (specs[first:])
 
     def apply_queued_update_specs(self):
         callbacks, update_specs_by_key = self._get_queued_update_changes()
@@ -321,7 +328,9 @@ class DVSController(object):
             return
 
         results = []
-        for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in self._chunked_update_specs(six.itervalues(update_specs_by_key))]):
+        for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in
+                                                                          self._chunked_update_specs(six.itervalues(
+                                                                                  update_specs_by_key))]):
             if result:
                 results.extend(result)
 
@@ -440,34 +449,34 @@ class DVSController(object):
         property_collector = vim.service_content.propertyCollector
 
         traversal_spec = vim_util.build_traversal_spec(
-                vim.client.factory,
-                "dvs_to_dvpg",
-                "DistributedVirtualSwitch",
-                "portgroup",
-                False,
-                [])
+            vim.client.factory,
+            "dvs_to_dvpg",
+            "DistributedVirtualSwitch",
+            "portgroup",
+            False,
+            [])
         object_spec = vim_util.build_object_spec(
-                vim.client.factory,
-                self._dvs,
-                [traversal_spec])
+            vim.client.factory,
+            self._dvs,
+            [traversal_spec])
         property_spec = vim_util.build_property_spec(
-                vim.client.factory,
-                "DistributedVirtualPortgroup",
-                ["key", "name", "config.description", "config.configVersion", "config.defaultPortConfig"])
+            vim.client.factory,
+            "DistributedVirtualPortgroup",
+            ["key", "name", "config.description", "config.configVersion", "config.defaultPortConfig"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
-                vim.client.factory,
-                [property_spec],
-                [object_spec])
+            vim.client.factory,
+            [property_spec],
+            [object_spec])
         options = vim.client.factory.create('ns0:RetrieveOptions')
         options.maxObjects = max_objects
 
         pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
-                options=options)
+                                             options=options)
 
         with vim_util.WithRetrieval(vim, pc_result) as pc_objects:
             for objContent in pc_objects:
-                props = {prop.name : prop.val for prop in objContent.propSet}
+                props = {prop.name: prop.val for prop in objContent.propSet}
                 props["ref"] = objContent.obj
                 props["configVersion"] = int(props.pop("config.configVersion", 0))
                 props["description"] = str(props.pop("config.description", ""))
@@ -595,7 +604,7 @@ class DVSController(object):
                 return
             except vmware_exceptions.VimException as e:
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e) \
-                        and ntry != retries-1:
+                        and ntry != retries - 1:
                     LOG.debug("Concurrent modification detected, will retry.")
                     ## TODO A proper read-out of the current config
                     props = vim_util.get_object_properties_dict(self.connection.vim, pg_ref,
@@ -610,7 +619,6 @@ class DVSController(object):
                     self.rectifyForFault(info.error.fault)
                     return
                 raise exceptions.wrap_wmvare_vim_exception(e)
-
 
     def rectifyForFault(self, fault):
         """
@@ -636,10 +644,10 @@ class DVSController(object):
             return
         LOG.debug("Hosts to rectify: {}".format(hosts))
         rectify_task = self.connection.invoke_api(
-                    self.connection.vim,
-                    "RectifyDvsOnHost_Task",
-                    self._service_content.dvSwitchManager,
-                    hosts=list(hosts))
+            self.connection.vim,
+            "RectifyDvsOnHost_Task",
+            self._service_content.dvSwitchManager,
+            hosts=list(hosts))
 
     def switch_port_blocked_state(self, port):
         try:
@@ -706,9 +714,9 @@ class DVSController(object):
             update_spec = self.builder.port_config_spec(
                 port_info.config.configVersion, name='')
             update_spec.key = port_info.key
-            #setting = self.builder.port_setting()
-            #setting.filterPolicy = self.builder.filter_policy([])
-            #update_spec.setting = setting
+            # setting = self.builder.port_setting()
+            # setting.filterPolicy = self.builder.filter_policy([])
+            # update_spec.setting = setting
             update_spec.operation = 'remove'
             update_task = self.connection.invoke_api(
                 self.connection.vim, 'ReconfigureDVPort_Task',
@@ -759,12 +767,13 @@ class DVSController(object):
 
         dvs_list = {}
         with vim_util.WithRetrieval(connection.vim, connection.invoke_api(
-                vim_util, 'get_objects', connection.vim, 'DistributedVirtualSwitch', 100, ['name', 'portgroup']) ) as dvswitches:
-                for dvs in dvswitches:
-                    p = { p.name: p.val for p in dvs.propSet}
-                    if dvs_name == p['name']:
-                        return dvs.obj, DVSController._get_datacenter(connection.vim, dvs.obj)
-                    dvs_list[dvs.obj] = p['portgroup'].ManagedObjectReference
+                vim_util, 'get_objects', connection.vim, 'DistributedVirtualSwitch', 100,
+                ['name', 'portgroup'])) as dvswitches:
+            for dvs in dvswitches:
+                p = {p.name: p.val for p in dvs.propSet}
+                if dvs_name == p['name']:
+                    return dvs.obj, DVSController._get_datacenter(connection.vim, dvs.obj)
+                dvs_list[dvs.obj] = p['portgroup'].ManagedObjectReference
 
         for dvs, port_groups in six.iteritems(dvs_list):
             for pg in port_groups:
@@ -889,7 +898,7 @@ class DVSController(object):
 
     def _increase_ports_on_portgroup(self, port_group):
         pg_info = self._get_config_by_ref(port_group)
-        #TODO(ekosareva): need to have max size of ports number
+        # TODO(ekosareva): need to have max size of ports number
         ports_number = max(INIT_PG_PORTS_COUNT, pg_info.numPorts * 2)
         pg_spec = self._build_pg_update_spec(
             pg_info.configVersion, ports_number=ports_number)
@@ -962,15 +971,15 @@ def connect(config, **kwds):
     while not connection:
         try:
             connection = api.VMwareAPISession(
-            config.vsphere_hostname,
-            config.vsphere_login,
-            config.vsphere_password,
-            config.api_retry_count,
-            config.task_poll_interval,
-            cacert=config.ca_certs,
-            insecure=False if config.ca_certs else True,
-            pool_size=config.connections_pool_size,
-            **kwds)
+                config.vsphere_hostname,
+                config.vsphere_login,
+                config.vsphere_password,
+                config.api_retry_count,
+                config.task_poll_interval,
+                cacert=config.ca_certs,
+                insecure=False if config.ca_certs else True,
+                pool_size=config.connections_pool_size,
+                **kwds)
         except ConnectionError:
             LOG.error(_LE("No connection to vSphere"))
             sleep(10)
@@ -1007,6 +1016,7 @@ def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
 def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
     dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
     return dvs
+
 
 def get_task_info(connection, task_ref):
     """

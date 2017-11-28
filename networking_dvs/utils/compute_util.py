@@ -18,7 +18,6 @@ from oslo_config.cfg import NoSuchOptError
 
 from networking_dvs.common import exceptions
 
-
 NOVA_API_VERSION = '2'
 
 
@@ -32,7 +31,6 @@ def get_hypervisors_by_host(cfg, host):
 
 
 def _make_nova_client(cfg):
-
     params = dict(
         username=cfg.nova.username,
         api_key=cfg.nova.password,

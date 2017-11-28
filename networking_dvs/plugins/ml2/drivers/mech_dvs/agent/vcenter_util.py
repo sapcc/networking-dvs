@@ -13,8 +13,10 @@
 #    under the License.
 
 import os
+
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
     import eventlet
+
     eventlet.monkey_patch()
 
 from eventlet.queue import Full, Empty, LightQueue as Queue
@@ -47,6 +49,7 @@ LOG = log.getLogger(__name__)
 class RequestCanceledException(exceptions.VimException):
     msg_fmt = _("The task was canceled by a user.")
     code = 200
+
 
 exceptions.register_fault_class('RequestCanceled', RequestCanceledException)
 
@@ -99,12 +102,12 @@ if attr.__version__ > '16':
 class _DVSPortDesc(object):
     dvs_uuid = attr.ib(convert=str, cmp=True)
     port_key = attr.ib(convert=str, cmp=True)
-    port_group_key = attr.ib(convert=str) # It is an int, but the WDSL defines it as a string
+    port_group_key = attr.ib(convert=str)  # It is an int, but the WDSL defines it as a string
     mac_address = attr.ib(convert=str)
-    connection_cookie = attr.ib(convert=str) # Same as with port_key, int which is represented as a string
+    connection_cookie = attr.ib(convert=str)  # Same as with port_key, int which is represented as a string
     connected = attr.ib(default=False)
     status = attr.ib(convert=str, default='')
-    config_version = attr.ib(convert=str, default='') # Same as with port_key, int which is represented as a string
+    config_version = attr.ib(convert=str, default='')  # Same as with port_key, int which is represented as a string
     vlan_id = attr.ib(default=None)
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
@@ -131,7 +134,7 @@ class _DVSPortDesc(object):
         # but a DistributedVirtualPort as returned by FetchDVPorts
         port_config = getattr(port, 'config', None)
         if port_config:
-            values['config_version']=_cast(port_config.configVersion)
+            values['config_version'] = _cast(port_config.configVersion)
 
             setting = getattr(port_config, 'setting', None)
             if setting:
@@ -165,11 +168,11 @@ class SpecBuilder(spec_builder.SpecBuilder):
         port_desc = port['port_desc']
         setting = self.port_setting()
         if port["segmentation_id"]:
-            setting.vlan=self.vlan(port["segmentation_id"])
+            setting.vlan = self.vlan(port["segmentation_id"])
         else:
-            setting.vlan=self.vlan(0)
-        setting.blocked=self.blocked(not port["admin_state_up"])
-        setting.filterPolicy=self.filter_policy(None)
+            setting.vlan = self.vlan(0)
+        setting.blocked = self.blocked(not port["admin_state_up"])
+        setting.filterPolicy = self.filter_policy(None)
 
         return self.port_config_spec(version=port_desc.config_version,
                                      key=port_desc.port_key,
@@ -241,7 +244,7 @@ class VCenterMonitor(object):
         self.error_queue = error_queue
         self._property_collector = None
         self.down_ports = {}
-        self.untried_ports = {} # The host is simply down
+        self.untried_ports = {}  # The host is simply down
         self.iteration = 0
         self.connection = connection
         # Map of the VMs and their NICs by the hardware key
@@ -258,7 +261,7 @@ class VCenterMonitor(object):
     def stop(self):
         try:
             self._quit_event.send(0)
-        except AssertionError: # In case someone already send an event
+        except AssertionError:  # In case someone already send an event
             pass
 
         # This will abort the WaitForUpdateEx early, so it will cancel leave the loop timely
@@ -301,13 +304,14 @@ class VCenterMonitor(object):
                 now = utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                     if port_desc.status != 'untried' or 0 == self.iteration - iteration:
-                        LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration, (now - when).total_seconds(), port_desc.status))
+                        LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
+                                                                    (now - when).total_seconds(), port_desc.status))
                 eventlet.sleep(0)
         except RequestCanceledException, e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
                 LOG.info("Waiting for updates was cancelled unexpectedly")
-                raise e # This will kill the whole process and we start again from scratch
+                raise e  # This will kill the whole process and we start again from scratch
         finally:
             if self.connection:
                 self.connection.logout
@@ -357,7 +361,7 @@ class VCenterMonitor(object):
     def _create_property_collector(self):
         vim = self.connection.vim
         _property_collector = self.connection.invoke_api(vim, 'CreatePropertyCollector',
-                                                    vim.service_content.propertyCollector)
+                                                         vim.service_content.propertyCollector)
 
         return _property_collector
 
@@ -462,7 +466,7 @@ class VCenterMonitor(object):
             status=connectable.status if connectable else None,
             vmobref=vmobref,
             device_key=value.key
-            ))
+        ))
         port_desc.device_type = value.__class__.__name__
         return port_desc
 
@@ -477,8 +481,8 @@ class VCenterMonitor(object):
             self.untried_ports.pop(mac_address, None)
             if then:
                 LOG.debug("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
-                                                               (now - then).total_seconds(),
-                                                               (self.iteration - iteration)))
+                                                                   (now - then).total_seconds(),
+                                                                   (self.iteration - iteration)))
             elif not port_desc in self.changed:
                 LOG.debug("Port {} {} came up connected".format(mac_address, port_desc.port_key))
             port_desc.connected_since = now
@@ -489,7 +493,8 @@ class VCenterMonitor(object):
                 self.untried_ports[mac_address] = port_desc
             elif not port_desc in self.down_ports:
                 status = port_desc.status
-                LOG.debug("Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
+                LOG.debug(
+                    "Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
                 if status == 'unrecoverableError' and self.error_queue:
                     self._put(self.error_queue, port_desc)
@@ -501,6 +506,7 @@ class VCenterMonitor(object):
             except Full:
                 continue
             break
+
 
 @trace_cls("vmwareapi")
 class VCenter(object):
@@ -523,7 +529,8 @@ class VCenter(object):
         self.uuid_dvs_map = {}
         self.network_dvs_map = {}
 
-        for network, dvs in six.iteritems(dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
+        for network, dvs in six.iteritems(
+                dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
@@ -571,7 +578,7 @@ class VCenter(object):
             dvs.queue_update_specs(specs, callback=callback)
 
     def get_dvs_by_uuid(self, uuid):
-        return self.uuid_dvs_map.get(uuid,None)
+        return self.uuid_dvs_map.get(uuid, None)
 
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
@@ -582,7 +589,7 @@ class VCenter(object):
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
                 port_desc = self._monitor_process.queue.get(block=block, timeout=timeout)
-                block = False # Only block on the first item
+                block = False  # Only block on the first item
                 if port_desc.status == 'deleted':
                     ports_by_mac.pop(port_desc.mac_address, None)
                     port = self.mac_port_map.pop(port_desc.mac_address, None)
@@ -683,7 +690,8 @@ def main():
             name = getattr(port_config, 'name', None)
             description = getattr(port_config, 'description', None)
             if not cookie and (name or description):
-                configs.append(builder.port_config_spec(port.key, version=port_config.configVersion, name='', description=''))
+                configs.append(
+                    builder.port_config_spec(port.key, version=port_config.configVersion, name='', description=''))
 
         if configs:
             dvs.update_ports(configs)
@@ -699,6 +707,7 @@ if __name__ == "__main__":
     try:
         resolution = float(os.getenv('DEBUG_BLOCKING'))
         import eventlet.debug
+
         eventlet.debug.hub_blocking_detection(state=True, resolution=resolution)
     except (ValueError, TypeError):
         pass

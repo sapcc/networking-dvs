@@ -102,10 +102,10 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
         if self.version == 2:
             response = self.dvs_notifier.bind_port_call(port,
-                                                [segment],
-                                                context.network.current,
-                                                context.host
-                                                )
+                                                        [segment],
+                                                        context.network.current,
+                                                        context.host
+                                                        )
             if response and 'bridge_name' in response:
                 bridge_name = response['bridge_name']
 
@@ -116,4 +116,3 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
                             self.vif_type,
                             vif_details)
         return True
-

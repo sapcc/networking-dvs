@@ -145,7 +145,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.connection.consume_in_threads()
 
     def book_port(self, port, network_segments, network_current):
-        LOG.debug("{} {} {}".format(port, network_segments, network_current))
+        LOG.debug("{} {} {}".format(port["id"], port["mac_address"], network_segments))
+
         dvs = None
         dvs_segment = None
         for segment in network_segments:

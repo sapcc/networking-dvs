@@ -39,12 +39,14 @@ except ImportError:
             if value is None:
                 return None
             return converter(value)
+
         return wrap
 
 _ANY_IPS = {
     'IPv4': ip_network(u'0.0.0.0/0'),
     'IPv6': ip_network(u'::/0')
-    }
+}
+
 
 @attr.s(cmp=True, hash=True)
 class Rule(object):
@@ -78,10 +80,11 @@ class Rule(object):
 @attr.s(cmp=True, hash=True)
 class SgAggr(object):
     pg_key = attr.ib(default=None)
-    vlan  = attr.ib(default=None)
+    vlan = attr.ib(default=None)
     rules = attr.ib(default=attr.Factory(dict))
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
+
 
 class PortConfigSpecBuilder(spec_builder.SpecBuilder):
     def __init__(self, spec_factory):
@@ -93,6 +96,7 @@ class PortConfigSpecBuilder(spec_builder.SpecBuilder):
 
     def create_spec(self, spec_type):
         return self.factory.create(spec_type)
+
 
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):
@@ -262,7 +266,7 @@ class DropAllRule(TrafficRuleBuilder):
     action = 'ns0:DvsDropNetworkRuleAction'
 
 
-def build_port_rules(builder, ports, hashed_rules = None):
+def build_port_rules(builder, ports, hashed_rules=None):
     port_config_list = []
     hashed_rules = hashed_rules or {}
     for port in ports:
@@ -330,9 +334,11 @@ def filter_policy(builder, sg_rules=None, hashed_rules=None, filter_config_key=N
 
     return builder.filter_policy(rules, filter_config_key=filter_config_key)
 
+
 def port_configuration(builder, port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
     setting = builder.port_setting()
-    setting.filterPolicy = filter_policy(builder, sg_rules=sg_rules, hashed_rules=hashed_rules, filter_config_key=filter_config_key)
+    setting.filterPolicy = filter_policy(builder, sg_rules=sg_rules, hashed_rules=hashed_rules,
+                                         filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
 
@@ -342,11 +348,11 @@ def port_configuration(builder, port_key, sg_rules=None, hashed_rules=None, vers
 def _rule_excepted(rule):
     if rule.direction == 'incomingPackets' and rule.protocol == 'udp':
         if (rule.ethertype == 'IPv4' and rule.port_range == (68, 68) and
-            rule.backward_port_range == (67, 67)):
-                return True
+                    rule.backward_port_range == (67, 67)):
+            return True
         if (rule.ethertype == 'IPv6' and rule.port_range == (546, 546) and
-            rule.backward_port_range == (547, 547)):
-                return True
+                    rule.backward_port_range == (547, 547)):
+            return True
     return False
 
 
@@ -387,8 +393,8 @@ def _patch_sg_rules(security_group_rules):
         rule.pop('remote_group_id', None)
 
         if rule.get('direction') == 'egress' \
-            and rule.get('ethertype') in ['IPv4', 'IPv6'] \
-                and  rule.get('dest_ip_prefix') is None:
+                and rule.get('ethertype') in ['IPv4', 'IPv6'] \
+                and rule.get('dest_ip_prefix') is None:
             rule['dest_ip_prefix'] = _ANY_IPS[rule.get('ethertype')]
 
         if 'protocol' in rule:
@@ -399,13 +405,14 @@ def _patch_sg_rules(security_group_rules):
             # also specifying the protocol to be either tcp or udp
             for proto in ['icmp', 'udp', 'tcp']:
                 new_rule = Rule(**rule)
-                new_rule.protocol=proto
+                new_rule.protocol = proto
                 if proto != 'icmp':
-                    new_rule.port_range_min=0
-                    new_rule.port_range_max=65535
+                    new_rule.port_range_min = 0
+                    new_rule.port_range_max = 65535
                 patched_rules.append(new_rule)
 
     return patched_rules
+
 
 def security_group_set(port):
     """
@@ -415,6 +422,7 @@ def security_group_set(port):
     sorted list of security group ids
     """
     return ",".join(sorted(port['security_groups']))
+
 
 def apply_rules(rules, sg_aggr, decrement=False):
     """
@@ -440,10 +448,12 @@ def apply_rules(rules, sg_aggr, decrement=False):
             sg_aggr.rules[rule] = 1
             sg_aggr.dirty = True
 
+
 def _consolidate(rules):
     grouped = defaultdict(list)
     for rule in rules:
-        id_ = (rule.direction, rule.ethertype, rule.protocol, rule.port_range_min, rule.port_range_max, rule.source_port_range_min, rule.source_port_range_max)
+        id_ = (rule.direction, rule.ethertype, rule.protocol, rule.port_range_min, rule.port_range_max,
+               rule.source_port_range_min, rule.source_port_range_max)
         grouped[id_].append(rule)
 
     for rule_set, rules in six.iteritems(grouped):
@@ -469,9 +479,9 @@ def _consolidate(rules):
             except IndexError:
                 yield rule
 
+
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
     return sorted(_consolidate(six.iterkeys(sg_aggr.rules)))
-

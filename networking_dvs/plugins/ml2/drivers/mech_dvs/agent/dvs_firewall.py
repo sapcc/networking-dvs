@@ -1,6 +1,7 @@
 import copy
 import os
 import eventlet
+
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
     eventlet.monkey_patch()
 
@@ -25,6 +26,7 @@ from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
+
 @trace_cls("driver")
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
@@ -35,7 +37,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             self.v_center.start()
 
         self._ports_by_device_id = {}  # Device-id seems to be the same as port id
-        self._sg_aggregates_per_dvs_uuid = defaultdict(lambda : defaultdict(sg_util.SgAggr))
+        self._sg_aggregates_per_dvs_uuid = defaultdict(lambda: defaultdict(sg_util.SgAggr))
         self._green = self.v_center.pool or GreenPool()
 
     def prepare_port_filter(self, ports):
@@ -93,7 +95,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def _merge_port_info_from_vcenter(self, ports):
         merged_ports = []
-        for port in ports: # We skip on missing ports, as we will be called by the dvs_agent for new ports again
+        for port in ports:  # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
             vcenter_port = copy.deepcopy(self.v_center.uuid_port_map.get(port_id, None))
             if vcenter_port:
@@ -157,7 +159,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         if sg_aggr.vlan:
             port_config.vlan = builder.vlan(sg_aggr.vlan)
 
-        sg_tags=['security_group:' + sg_set, 'host:' + CONF.host]
+        sg_tags = ['security_group:' + sg_set, 'host:' + CONF.host]
         stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
         pg = pg_per_sg.get(sg_set, None)
@@ -198,9 +200,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         sg_aggr.ports_to_assign = []
 
         if not sg_aggr.vlan and ports:
-            vlan_ids = Counter([ port['segmentation_id']
-                    for port in ports
-                    if 'vlan' == port.get('network_type', None) and port.get('segmentation_id', None) ])
+            vlan_ids = Counter([port['segmentation_id']
+                                for port in ports
+                                if 'vlan' == port.get('network_type', None) and port.get('segmentation_id', None)])
             sg_aggr.vlan, _ = vlan_ids.most_common(1)[0]
 
         port_keys_to_drop = defaultdict(list)
@@ -256,14 +258,15 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         """
         for dvs_uuid, port_keys in six.iteritems(port_keys_to_drop):
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            dvs.filter_update_specs(lambda x : x.key not in port_keys)
+            dvs.filter_update_specs(lambda x: x.key not in port_keys)
 
-        eventlet.sleep(0) # yield to allow VM network reassignments to take place
+        eventlet.sleep(0)  # yield to allow VM network reassignments to take place
 
     def _create_dvpg_and_update_sg_aggr(self, dvs, sg_set, port_config, sg_aggr):
         pg = dvs.create_dvportgroup(sg_set, port_config)
         sg_aggr.pg_key = pg["key"]
         self._reassign_ports(sg_aggr)
+
 
 @stats.timed()
 def reconfig_vm(dvs, vm_ref, vm_config_spec):
@@ -275,6 +278,7 @@ def reconfig_vm(dvs, vm_ref, vm_config_spec):
     except vmware_exceptions.VimException as e:
         LOG.info("Unable to reassign VM, exception is %s.", e)
 
+
 def _ports_by_switch(ports=None):
     ports_by_switch = defaultdict(list)
     for port in ports:
@@ -283,6 +287,7 @@ def _ports_by_switch(ports=None):
         ports_by_switch[port['port_desc'].dvs_uuid].append(port)
 
     return ports_by_switch
+
 
 def noop(*args):
     pass
