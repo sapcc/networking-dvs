@@ -102,7 +102,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
         if self.version == 2:
             response = self.dvs_notifier.bind_port_call(port,
-                                                context.network.network_segments,
+                                                [segment],
                                                 context.network.current,
                                                 context.host
                                                 )
