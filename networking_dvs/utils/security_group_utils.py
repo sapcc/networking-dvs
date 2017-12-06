@@ -14,19 +14,17 @@
 #    under the License.
 
 import abc
-import attr
 import bisect
 import copy
-import six
-import string
-
 from collections import defaultdict
+
+import attr
+import six
 from ipaddress import ip_network, collapse_addresses
+from neutron.i18n import _LI
 from oslo_log import log
 
-from neutron.i18n import _LI
-
-from networking_dvs.common import constants as dvs_const, exceptions
+from networking_dvs.common import constants as dvs_const
 from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
@@ -184,7 +182,7 @@ class TrafficRuleBuilder(object):
             cidr = _ANY_IPS[self.ethertype]
             result = self.spec_builder.create_spec('ns0:IpRange')
             result.addressPrefix = str(cidr.network_address)
-            result.prefixLength = '0' # Not just zero, because it evaluates to false and will be dropped
+            result.prefixLength = '0'  # Not just zero, because it evaluates to false and will be dropped
         elif cidr.prefixlen < cidr.max_prefixlen:
             result = self.spec_builder.create_spec('ns0:IpRange')
             result.addressPrefix = str(cidr.network_address)
@@ -353,10 +351,10 @@ def port_configuration(builder, port_key, sg_rules=None, hashed_rules=None, vers
 def _rule_excepted(rule):
     if rule.direction == 'incomingPackets' and rule.protocol == 'udp':
         if (rule.ethertype == 'IPv4' and rule.port_range == (68, 68) and
-                    rule.backward_port_range == (67, 67)):
+                rule.backward_port_range == (67, 67)):
             return True
         if (rule.ethertype == 'IPv6' and rule.port_range == (546, 546) and
-                    rule.backward_port_range == (547, 547)):
+                rule.backward_port_range == (547, 547)):
             return True
     return False
 
@@ -487,7 +485,7 @@ def _consolidate_rules(rules):
 
 def _consolidate_ipv4_6(rules):
     grouped = defaultdict(list)
-    for rule in rules: # Group by anything but the ethertype
+    for rule in rules:  # Group by anything but the ethertype
         if rule.ip_prefix.prefixlen > 0:
             yield rule
         else:

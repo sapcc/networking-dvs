@@ -10,7 +10,6 @@ from eventlet.greenpool import GreenPool
 
 import six
 from collections import defaultdict, Counter
-from functools import partial
 
 from neutron.agent import firewall
 from neutron.i18n import _LE

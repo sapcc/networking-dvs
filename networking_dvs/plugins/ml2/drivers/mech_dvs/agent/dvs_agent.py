@@ -42,11 +42,10 @@ from neutron.i18n import _LI, _LW, _LE
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
 from networking_dvs.api import dvs_agent_rpc_api
-from networking_dvs.common import constants as dvs_const, config, exceptions
+from networking_dvs.common import constants as dvs_const, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
-
 
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
@@ -87,11 +86,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         super(DvsNeutronAgent, self).__init__()
 
-        self.pool = eventlet.greenpool.GreenPool(size=10) # Start small, so we identify possible bottlenecks
+        self.pool = eventlet.greenpool.GreenPool(size=10)  # Start small, so we identify possible bottlenecks
 
         self.conf = conf or CONF
 
-        network_maps = neutron_utils.parse_mappings( self.conf.ML2_VMWARE.network_maps )
+        network_maps = neutron_utils.parse_mappings(self.conf.ML2_VMWARE.network_maps)
         network_maps_v2 = {}
 
         self.agent_state = {
@@ -123,7 +122,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                                         self.sg_plugin_rpc,
                                                         local_vlan_map=None,
                                                         integration_bridge=self.api,  # Passed on to FireWall Driver
-                                                        defer_refresh_firewall=True) # Can only be false, if ...
+                                                        defer_refresh_firewall=True)  # Can only be false, if ...
             # ... we keep track of all the security groups of a port, and probably more changes
 
         for network, dvs in six.iteritems(self.api.network_dvs_map):
@@ -168,7 +167,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         client_factory = dvs.connection.vim.client.factory
         builder = sg_util.PortConfigSpecBuilder(client_factory)
         port_config = sg_util.port_configuration(
-                builder, None, sg_set_rules, {}, None, None).setting
+            builder, None, sg_set_rules, {}, None, None).setting
         port_config.vlan = builder.vlan(dvs_segment["segmentation_id"])
 
         pg = dvs.create_dvportgroup(sg_set, port_config, update=False)
@@ -359,7 +358,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
 
-
     @stats.timed()
     def process_ports(self):
         LOG.debug("Entered")
@@ -474,8 +472,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         while self._check_and_handle_signal():
             trace_step = self.conf.profiler.enabled \
-                and self.conf.DVS.trace_every_nth_iteration > 0 \
-                    and self.iter_num % self.conf.DVS.trace_every_nth_iteration == 0
+                         and self.conf.DVS.trace_every_nth_iteration > 0 \
+                         and self.iter_num % self.conf.DVS.trace_every_nth_iteration == 0
 
             if trace_step:
                 base_id = uuidutils.generate_uuid()
@@ -504,6 +502,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             self.api.stop()
         if self.pool:
             self.pool.waitall()
+
 
 def main():
     common_config.init(sys.argv[1:])

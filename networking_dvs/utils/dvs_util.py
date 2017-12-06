@@ -60,7 +60,7 @@ def wrap_retry(func):
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e):
                     continue
                 elif (dvs_const.LOGIN_PROBLEM_TEXT in str(e) and
-                              login_failures < dvs_const.LOGIN_RETRIES - 1):
+                      login_failures < dvs_const.LOGIN_RETRIES - 1):
                     login_failures += 1
                     continue
                 else:
@@ -330,7 +330,7 @@ class DVSController(object):
         results = []
         for result in self.pool.starmap(self._apply_queued_update_specs, [(update_spec, callbacks) for update_spec in
                                                                           self._chunked_update_specs(six.itervalues(
-                                                                                  update_specs_by_key))]):
+                                                                              update_specs_by_key))]):
             if result:
                 results.extend(result)
 

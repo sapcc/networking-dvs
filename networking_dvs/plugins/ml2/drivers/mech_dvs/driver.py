@@ -12,19 +12,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_log import log
-
+from neutron import context
 from neutron.agent import securitygroups_rpc
 from neutron.extensions import portbindings
 from neutron.i18n import _LI
 from neutron.plugins.common import constants as p_constants
-
-from neutron import context
 from neutron.plugins.ml2 import driver_api as api
 from neutron.plugins.ml2.drivers import mech_agent
+from oslo_log import log
+
 from networking_dvs.api import dvs_agent_rpc_api
 from networking_dvs.common import constants as dvs_constants
-from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 
 LOG = log.getLogger(__name__)
 

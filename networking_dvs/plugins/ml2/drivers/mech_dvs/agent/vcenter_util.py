@@ -88,7 +88,7 @@ def get_cluster_ref_by_name(connection, cluster_name):
     all_clusters = get_all_cluster_mors(connection)
     for cluster in all_clusters:
         if (hasattr(cluster, 'propSet') and
-                    cluster.propSet[0].val == cluster_name):
+                cluster.propSet[0].val == cluster_name):
             return cluster.obj
 
 
