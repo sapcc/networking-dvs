@@ -1,5 +1,6 @@
 import copy
 import os
+
 import eventlet
 
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
@@ -12,16 +13,15 @@ from collections import defaultdict, Counter
 from functools import partial
 
 from neutron.agent import firewall
-from neutron.i18n import _LE, _LW, _LI
+from neutron.i18n import _LE
 from oslo_log import log as logging
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
 from osprofiler.profiler import trace_cls
 from networking_dvs.common import config
-from networking_dvs.utils import dvs_util, security_group_utils as sg_util
+from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent.vcenter_util import VCenter
-from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
@@ -123,8 +123,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
                 if not sg_aggr.pg_key:
                     dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-                    pg_per_sg = dvs.get_port_group_by_security_group()
-                    pg = pg_per_sg.get(sg_set, {})
+                    pg = dvs.get_port_group_for_security_group_set(sg_set)
                     if pg:
                         sg_aggr.pg_key = pg["key"]
                         sg_aggr.vlan = pg["defaultPortConfig"].vlan.vlanId
@@ -141,7 +140,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
         client_factory = dvs.connection.vim.client.factory
         builder = sg_util.PortConfigSpecBuilder(client_factory)
-        pg_per_sg = dvs.get_port_group_by_security_group()
 
         if not sg_aggr.dirty:
             if sg_aggr.pg_key:
@@ -162,7 +160,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         sg_tags = ['security_group:' + sg_set, 'host:' + CONF.host]
         stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
-        pg = pg_per_sg.get(sg_set, None)
+        pg = dvs.get_port_group_for_security_group_set(sg_set)
         if pg:
             sg_aggr.pg_key = pg["key"]
             if len(sg_set_rules) == 0:
@@ -178,14 +176,13 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @stats.timed()
     def _apply_changed_sg_aggregates(self):
-        def _apply(dvs_uuid, sg_aggregates):
-            dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            apply_on_dvs = partial(self._apply_changed_sg_aggr, dvs)
+        def _items():
+            for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
+                dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+                for sg_set, sg_aggregate in six.iteritems(sg_aggregates):
+                    yield dvs, sg_set, sg_aggregate
 
-            for result in self._green.starmap(apply_on_dvs, six.iteritems(sg_aggregates)):
-                pass
-
-        for result in self._green.starmap(_apply, six.iteritems(self._sg_aggregates_per_dvs_uuid)):
+        for result in self._green.starmap(self._apply_changed_sg_aggr, _items()):
             pass
 
     def _reassign_ports(self, sg_aggr):
@@ -246,7 +243,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             # Queue the update
             vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
-            self._green.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
+            if not CONF.AGENT.dry_run:
+                self._green.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
+            else:
+                LOG.debug("Reassign: %s", vm_config_spec)
 
             # Store old port keys of reassigned VMs
             port_keys_to_drop[dvs_uuid].append(port_desc.port_key)

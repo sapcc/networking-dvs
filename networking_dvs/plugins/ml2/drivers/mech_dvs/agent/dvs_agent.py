@@ -51,9 +51,11 @@ from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
+
 def touch_file(fname, times=None):
     with open(fname, 'a'):
         os.utime(fname, times)
+
 
 def _touch_fw_timestamp(ports, now=None):
     """ Set a timestamp on the ports to measure firewall latency """
@@ -357,6 +359,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
 
+
     @stats.timed()
     def process_ports(self):
         LOG.debug("Entered")
@@ -458,12 +461,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                               [])
         LOG.debug("Left")
 
-
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
             LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                       self.agent_id, self.conf.host))
-            self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids, self.agent_id, self.conf.host)
+            if not CONF.AGENT.dry_run:
+                self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids,
+                                                   self.agent_id, self.conf.host)
 
     def rpc_loop(self):
         eventlet.sleep(0)

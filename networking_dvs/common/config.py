@@ -15,6 +15,8 @@ agent_opts = [
                help=_("Set new timeout in seconds for new rpc calls after "
                       "agent receives SIGTERM. If value is set to 0, rpc "
                       "timeout won't be changed")),
+    cfg.BoolOpt('dry_run', default=False,
+                help=_("Should the agent run without applying changes")),
 ]
 
 vmware_opts = [

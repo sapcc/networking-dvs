@@ -13,34 +13,34 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from collections import defaultdict
-from time import sleep
 import hashlib
-import re
+import uuid
+
 import itertools
 import six
-import string
-import uuid
 import time
-
-from neutron.i18n import _LI, _LW, _LE
 from neutron.common import utils as neutron_utils
+from neutron.i18n import _LI, _LW, _LE
 from oslo_log import log
 from oslo_utils import timeutils
+from requests.exceptions import ConnectionError
+from time import sleep
+
+from networking_dvs.common import config
+from networking_dvs.common import constants as dvs_const
+from networking_dvs.common import exceptions
+from networking_dvs.common.util import stats
+from networking_dvs.utils import spec_builder
 from oslo_vmware import api
 from oslo_vmware import exceptions as vmware_exceptions
 from oslo_vmware import vim_util
 from osprofiler.profiler import trace_cls
-from requests.exceptions import ConnectionError
-
-from networking_dvs.common import constants as dvs_const
-from networking_dvs.common.util import stats
-from networking_dvs.common import exceptions
-from networking_dvs.utils import spec_builder
 
 LOG = log.getLogger(__name__)
 
 INIT_PG_PORTS_COUNT = 4
+
+CONF = config.CONF
 
 
 def wrap_retry(func):
@@ -429,16 +429,13 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
-    def get_port_group_by_security_group(self, max_objects=100):
+    def get_port_group_for_security_group_set(self, security_group_set, max_objects=100):
         portgroups = self._get_portgroups(max_objects)
-        result = {}
 
         for dvpg in six.itervalues(portgroups):
             description = dvpg["description"]
-            if description:
-                result[dvpg["description"]] = dvpg
-
-        return result
+            if description == security_group_set:
+                return dvpg
 
     def _get_portgroups(self, max_objects=100, refresh=False):
         if self._port_groups_by_name and not refresh:
@@ -512,6 +509,9 @@ class DVSController(object):
             if update:
                 self.update_dvportgroup(existing, port_config)
             return existing
+
+        if CONF.AGENT.dry_run:
+            return
 
         try:
             pg_spec = self.builder.pg_config(port_config)
@@ -587,15 +587,19 @@ class DVSController(object):
                     pg_spec.name = name
 
                 now = timeutils.utcnow()
-                pg_update_task = self.connection.invoke_api(
-                    self.connection.vim,
-                    'ReconfigureDVPortgroup_Task',
-                    pg_ref, spec=pg_spec)
+                if not CONF.AGENT.dry_run:
+                    pg_update_task = self.connection.invoke_api(
+                        self.connection.vim,
+                        'ReconfigureDVPortgroup_Task',
+                        pg_ref, spec=pg_spec)
+                else:
+                    LOG.debug(pg_spec)
 
                 pg["configVersion"] += 1
                 pg["defaultPortConfig"] = port_config
 
-                self.connection.wait_for_task(pg_update_task)
+                if not CONF.AGENT.dry_run:
+                    self.connection.wait_for_task(pg_update_task)
 
                 delta = timeutils.utcnow() - now
                 stats.timing('networking_dvs.dvportgroup.updated', delta)

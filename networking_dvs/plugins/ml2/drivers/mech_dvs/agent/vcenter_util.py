@@ -21,7 +21,6 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 
 from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
-from eventlet.greenpool import GreenPile
 
 import atexit
 import attr
@@ -573,7 +572,10 @@ class VCenter(object):
                 if (port["network_type"] == "vlan" and not port["segmentation_id"] is None) \
                         or port["network_type"] == "flat":
                     spec = self.builder.neutron_to_port_config_spec(port)
-                    specs.append(spec)
+                    if not CONF.AGENT.dry_run:
+                        specs.append(spec)
+                    else:
+                        LOG.debug(spec)
 
             dvs.queue_update_specs(specs, callback=callback)
 
