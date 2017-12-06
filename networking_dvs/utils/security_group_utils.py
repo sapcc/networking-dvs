@@ -134,7 +134,7 @@ class TrafficRuleBuilder(object):
                                   self.protocol, name=name.strip())
         if cidr_bool:
             rule.cidr = self.cidr
-        else:
+        elif self.ethertype:
             rule.cidr = _ANY_IPS[self.ethertype]
         rule.port_range = self.backward_port_range
         rule.backward_port_range = self.port_range
@@ -454,7 +454,7 @@ def apply_rules(rules, sg_aggr, decrement=False):
             sg_aggr.dirty = True
 
 
-def _consolidate(rules):
+def _consolidate_rules(rules):
     grouped = defaultdict(list)
     for rule in rules:
         id_ = (rule.direction, rule.ethertype, rule.protocol, rule.port_range_min, rule.port_range_max,
@@ -485,8 +485,32 @@ def _consolidate(rules):
                 yield rule
 
 
+def _consolidate_ipv4_6(rules):
+    grouped = defaultdict(list)
+    for rule in rules: # Group by anything but the ethertype
+        if rule.ip_prefix.prefixlen > 0:
+            yield rule
+        else:
+            id_ = (rule.direction, rule.protocol, rule.port_range_min, rule.port_range_max,
+                   rule.source_port_range_min, rule.source_port_range_max)
+            grouped[id_].append(rule)
+
+    for ruleset in six.itervalues(grouped):
+        # Cannot be zero
+        if len(ruleset) == 1:
+            yield ruleset[0]
+        else:
+            # The only two ethertypes we have are IPv4 and IPv6
+            items = attr.asdict(ruleset[0])
+            # We drop the ethertype and prefixes, which will result in any IPv4 or IPv6 address
+            items.pop('ethertype')
+            items.pop('source_ip_prefix')
+            items.pop('dest_ip_prefix')
+            yield Rule(**items)
+
+
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
-    return sorted(_consolidate(six.iterkeys(sg_aggr.rules)))
+    return sorted(_consolidate_ipv4_6(_consolidate_rules(six.iterkeys(sg_aggr.rules))))
