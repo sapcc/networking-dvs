@@ -333,7 +333,7 @@ def filter_policy(builder, sg_rules=None, hashed_rules=None, filter_config_key=N
         reverse_seq += 10
 
     seq = len(rules) * 10
-    for protocol in dvs_const.PROTOCOL.values():
+    for protocol in dvs_const.PROTOCOL.keys():
         rules.append(DropAllRule(builder, None, protocol,
                                  name='drop all').build(seq))
         seq += 10

@@ -17,11 +17,8 @@ DVS = 'dvs'
 AGENT_TYPE_DVS = 'DVS Agent'
 # protocol number according to RFC 1700
 PROTOCOL = {'icmp': 1,
-            'igmp': 2,
             'tcp': 6,
             'udp': 17,
-            'rsvp': 46,
-            'gre': 47
             }
 
 DVS_PORTGROUP_NAME_MAXLEN = 80
