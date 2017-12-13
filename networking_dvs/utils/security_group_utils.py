@@ -119,8 +119,11 @@ class TrafficRuleBuilder(object):
 
         self.protocol = protocol
         if protocol:
+            protocol_number = dvs_const.PROTOCOL.get(protocol, None)
+            if not protocol_number:
+                raise ValueError("Unknown protocol %s", protocol)
             int_exp = self.spec_builder.create_spec('ns0:IntExpression')
-            int_exp.value = dvs_const.PROTOCOL.get(protocol, protocol)
+            int_exp.value = protocol_number
             self.ip_qualifier.protocol = int_exp
 
         self.name = name
@@ -369,20 +372,23 @@ def _create_rule(builder, rule_info, ip=None, name=None):
         cidr = rule_info.dest_ip_prefix
         source_port_range_min_default = dvs_const.MIN_EPHEMERAL_PORT
 
-    rule = rule_class(
-        spec_builder=builder,
-        ethertype=rule_info.ethertype,
-        protocol=rule_info.protocol,
-        name=name
-    )
-    rule.cidr = ip or cidr
+    try:
+        rule = rule_class(
+            spec_builder=builder,
+            ethertype=rule_info.ethertype,
+            protocol=rule_info.protocol,
+            name=name
+        )
+        rule.cidr = ip or cidr
 
-    if rule_info.protocol in ('tcp', 'udp', None):
-        rule.port_range = (rule_info.port_range_min,
-                           rule_info.port_range_max)
-        rule.backward_port_range = (
-            rule_info.source_port_range_min or source_port_range_min_default,
-            rule_info.source_port_range_max or dvs_const.MAX_EPHEMERAL_PORT)
+        if rule_info.protocol in ('tcp', 'udp', None):
+            rule.port_range = (rule_info.port_range_min,
+                               rule_info.port_range_max)
+            rule.backward_port_range = (
+                rule_info.source_port_range_min or source_port_range_min_default,
+                rule_info.source_port_range_max or dvs_const.MAX_EPHEMERAL_PORT)
+    except KeyError:
+        return None
 
     return rule
 
