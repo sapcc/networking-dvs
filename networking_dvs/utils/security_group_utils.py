@@ -406,8 +406,11 @@ def _patch_sg_rules(security_group_rules):
                 and rule.get('dest_ip_prefix') is None:
             rule['dest_ip_prefix'] = _ANY_IPS[rule.get('ethertype')]
 
-        if 'protocol' in rule:
-            patched_rules.append(Rule(**rule))
+        protocol = rule.get('protocol', None)
+        if protocol:
+            # Filter out unsupported protocols
+            if protocol.lower() in dvs_const.PROTOCOL:
+                patched_rules.append(Rule(**rule))
         else:
             # We need to multiply the rules here,
             # because we cannot specify a port-range without
