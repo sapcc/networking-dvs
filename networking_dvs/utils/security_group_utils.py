@@ -492,7 +492,7 @@ def _consolidate_rules(rules):
 def _consolidate_ipv4_6(rules):
     grouped = defaultdict(list)
     for rule in rules:  # Group by anything but the ethertype
-        if rule.ip_prefix.prefixlen > 0:
+        if rule.ip_prefix and rule.ip_prefix.prefixlen > 0:
             yield rule
         else:
             id_ = (rule.direction, rule.protocol, rule.port_range_min, rule.port_range_max,
