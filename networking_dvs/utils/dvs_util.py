@@ -170,6 +170,28 @@ class DVSController(object):
                                                              self._dvs, 'uuid')
         return self._uuid
 
+    @property
+    def mtu(self):
+        self.dvs_obj = self.connection.invoke_api(vim_util, 'get_object_property', self.connection.vim,
+                                                             self._dvs, 'config')
+
+        return self.dvs_obj['maxMtu']
+
+    def update_mtu(self, max_mtu):
+        try:
+            pg_config_info = self._build_dvswitch_update_spec()
+            pg_config_info.maxMtu = max_mtu
+            pg_config_info.configVersion = self.dvs_obj['configVersion']
+
+            pg_update_task = self.connection.invoke_api(
+                self.connection.vim,
+                'ReconfigureDvs_Task',
+                self._dvs, spec=pg_config_info)
+
+            self.connection.wait_for_task(pg_update_task)
+        except vmware_exceptions.VimException as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
+
     def create_network(self, network, segment):
         name = self._get_net_name(self.dvs_name, network)
         blocked = not network['admin_state_up']
@@ -753,6 +775,10 @@ class DVSController(object):
         pg.type = 'earlyBinding'
         pg.description = 'Managed By Neutron'
         return pg
+
+    def _build_dvswitch_update_spec(self):
+        dvswitch_config = self.builder.dv_switch_config()
+        return dvswitch_config
 
     def _build_pg_update_spec(self, config_version,
                               blocked=None,

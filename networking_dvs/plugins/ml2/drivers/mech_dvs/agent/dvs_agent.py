@@ -160,8 +160,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if not dvs:
             return {}
 
+
+
         sg_set = sg_util.security_group_set(port)
         dvpg_name = dvs_util.dvportgroup_name(dvs.uuid, sg_set)
+
+        self.max_mtu = dvs.mtu
+        self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
 
         sg_set_rules = []
         client_factory = dvs.connection.vim.client.factory
@@ -177,6 +182,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             return None
 
         return {"bridge_name": pg["name"]}
+
+    def mtu_update(self, network_mtu, dvs_mtu, dvs, network_current):
+        if network_mtu is not None and dvs_mtu is not None:
+            if int(network_mtu) > int(dvs_mtu):
+                LOG.warning('Network: %s has MTU of %s which is bigger than the DVS MTU.', network_current['name'], network_current['mtu'])
+                LOG.info("Updating DVS mtu...")
+                dvs.update_mtu(network_mtu)
+
 
     def port_update(self, context, **kwargs):
         LOG.info("port_update message {}".format(kwargs))

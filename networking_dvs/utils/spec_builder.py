@@ -38,6 +38,10 @@ class SpecBuilder(object):
         spec.policy = policy
         return spec
 
+    def dv_switch_config(self):
+        spec = self.factory.create('ns0:VMwareDVSConfigSpec')
+        return spec
+
     def port_config_spec(self, key=None, version=None, setting=None, name=None, description=None):
         spec = self.factory.create('ns0:DVPortConfigSpec')
         spec.operation = 'edit'
