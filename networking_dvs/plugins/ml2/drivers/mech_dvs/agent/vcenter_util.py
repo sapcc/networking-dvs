@@ -313,7 +313,7 @@ class VCenterMonitor(object):
                 raise e  # This will kill the whole process and we start again from scratch
         finally:
             if self.connection:
-                self.connection.logout
+                self.connection.logout()
 
     def _run_safe(self):
         while not self._quit_event.ready():
