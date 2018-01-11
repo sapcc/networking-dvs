@@ -433,7 +433,18 @@ def security_group_set(port):
     A security group set is a comma-separated,
     sorted list of security group ids
     """
-    return ",".join(sorted(port['security_groups']))
+    # There are 36 chars to a uuid, and in the description fits 255 chars
+    security_groups = sorted(port['security_groups'])
+    num_groups = len(security_groups)
+    if num_groups < 7:  # Up to 6 fit in full length
+        return ",".join(security_groups)
+    elif num_groups < 13:  # Up to twelve in split in the "middle"
+        return ",".join([g[:18] for g in security_groups])
+    elif num_groups < 28:
+        return ",".join([g[:8] for g in security_groups])
+
+    LOG.warning("Too many security groups for port %s", port['id'])
+    return None
 
 
 def apply_rules(rules, sg_aggr, decrement=False):
