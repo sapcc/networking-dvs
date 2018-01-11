@@ -306,7 +306,7 @@ class VCenterMonitor(object):
                         LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
                                                                     (now - when).total_seconds(), port_desc.status))
                 eventlet.sleep(0)
-        except RequestCanceledException, e:
+        except RequestCanceledException as e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
                 LOG.info("Waiting for updates was cancelled unexpectedly")
