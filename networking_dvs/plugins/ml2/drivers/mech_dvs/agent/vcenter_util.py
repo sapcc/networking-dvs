@@ -149,8 +149,8 @@ class _DVSPortDesc(object):
         if port_state:
             try:
                 values['link_up'] = port_state.runtimeInfo.linkUp
-            except AttributeError, e:
-                LOG.error(e)
+            except AttributeError as e:
+                pass
 
         return values
 
