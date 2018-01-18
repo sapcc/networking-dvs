@@ -24,7 +24,7 @@ import collections
 import signal
 import six
 import sys
-
+from collections import defaultdict
 import oslo_messaging
 
 from oslo_config import cfg
@@ -39,6 +39,8 @@ from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config, topics, constants as n_const, utils as neutron_utils
 from neutron.common import profiler
 from neutron.i18n import _LI, _LW, _LE
+from neutron.api.rpc.handlers import securitygroups_rpc
+from neutron.agent import firewall
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
 from networking_dvs.api import dvs_agent_rpc_api
@@ -47,9 +49,20 @@ from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util
 
-LOG = logging.getLogger(__name__)
-CONF = config.CONF
 
+LOG = logging.getLogger(__name__)
+_core_opts = [
+    cfg.StrOpt('port-id',
+               default='',
+               help=_('ID for the specific port'),
+               deprecated_for_removal=False),
+    cfg.StrOpt('correct',
+               default='False',
+               help='Specify --correct for changing specific configuration',
+               deprecated_for_removal=False),
+]
+CONF = config.CONF
+CONF.register_cli_opts(_core_opts)
 
 def touch_file(fname, times=None):
     with open(fname, 'a'):
@@ -159,7 +172,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         if not dvs:
             return {}
-
 
 
         sg_set = sg_util.security_group_set(port)
@@ -516,6 +528,84 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if self.pool:
             self.pool.waitall()
 
+def neutron_dvs_cli():
+    """
+        CLI command for retrieving a port from Neutron by id;
+        Comparing the retrieved port to a port in the linked portgroup from vSphere;
+        The port from vSphere is fetched by the Neutron port MAC address and the portgroup key;
+        If --correct opt is set a reconfigure task on the port will be started which will apply the rules from the Neutron port to the DVS port
+    :return: 
+    """
+    common_config.init(sys.argv[1:])
+    port_id = CONF.port_id
+    correct = CONF.correct
+
+    profiler.setup('neutron-dvs-agent-cli', cfg.CONF.host)
+    agent = DvsNeutronAgent()
+    neutron_ports = agent.plugin_rpc.get_devices_details_list(agent.context, devices=[port_id],
+                                                             agent_id=agent.agent_id,
+                                                             host=agent.conf.host)
+
+    if neutron_ports[0].has_key('mac_address'):
+        mac_addr = neutron_ports[0]['mac_address']
+    else:
+        raise Exception('Neutron port not found!')
+
+    sg_api = securitygroups_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
+    sg_info = sg_api.security_group_info_for_devices(agent.context, [neutron_ports[0]['port_id']])
+
+    rules = sg_api.security_group_rules_for_devices(agent.context, [port_id])
+    patched_sg_rules = sg_util._patch_sg_rules(rules[port_id]['security_group_rules'])
+
+    sg_set = sg_util.security_group_set(sg_info)
+
+    dvs = agent.api.network_dvs_map.get(neutron_ports[0]['physical_network'], None)
+    sg_aggr_obj = defaultdict(lambda: defaultdict(sg_util.SgAggr))
+    sg_aggr = sg_aggr_obj[dvs.uuid][sg_set]
+    sg_util.apply_rules(patched_sg_rules, sg_aggr)
+
+    client_factory = dvs.connection.vim.client.factory
+    builder = sg_util.PortConfigSpecBuilder(client_factory)
+
+    sg_set_rules = sg_util.get_rules(sg_aggr)
+    port_config = sg_util.port_configuration(
+        builder, None, sg_set_rules, {}, None, None).setting
+
+    neutron_vlan_id = neutron_ports[0]['segmentation_id']
+    dvpg_name = dvs_util.dvportgroup_name(dvs.uuid, sg_set)
+
+    """
+        Retrieving the DVS portgroup and properties
+    """
+    port_group = dvs.get_port_group_for_security_group_set(sg_set)
+    portgroup_key = port_group['ref']['value']
+
+    dvs_vlan_id = port_group['defaultPortConfig'].vlan.vlanId
+
+    dvs_port = agent.api.fetch_ports_by_mac(portgroup_key, mac_addr)
+    neutron_port_rules = port_config.filterPolicy.filterConfig[0].trafficRuleset.rules
+    dvs_port_rules = dvs_port.config.setting.filterPolicy.filterConfig[0].trafficRuleset.rules
+
+    match = False
+
+    for i in range(len(dvs_port_rules)):
+        config_match = dvs_util._config_differs(dvs_port_rules[i], neutron_port_rules[i])
+        if config_match:
+            match = True
+            print("Neutron Port configuration rule not matched for : ", neutron_port_rules[i])
+            print("DVS Port configuraiton rule: ", dvs_port_rules[i])
+
+    if match == False:
+        print("Neutron port config matches DVS port config")
+    else:
+        if correct == 'True':
+            print("Updating port configuration")
+            if neutron_vlan_id != dvs_vlan_id:
+                port_config.vlan = builder.vlan(neutron_vlan_id)
+
+            dv_port_config_spec = builder.port_config_spec(key=dvs_port.key, version=dvs_port.config.configVersion,
+                                                           setting=port_config)
+            dvs.update_ports([dv_port_config_spec])
 
 def main():
     common_config.init(sys.argv[1:])

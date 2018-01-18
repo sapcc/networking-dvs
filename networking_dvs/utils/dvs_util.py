@@ -87,6 +87,7 @@ def dvportgroup_name(uuid, sg_set):
 
 
 def _config_differs(current, update):
+
     if current.__class__ != update.__class__:
         return True
 
@@ -132,7 +133,6 @@ def _config_differs(current, update):
                 return False
 
     return False
-
 
 @trace_cls("vmwareapi")
 class DVSController(object):
@@ -609,6 +609,7 @@ class DVSController(object):
             try:
                 pg_spec = self.builder.pg_config(port_config)
                 pg_spec.configVersion = str(pg["configVersion"])
+
                 if name and name != pg["name"]:
                     pg_spec.name = name
 

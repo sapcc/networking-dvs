@@ -454,7 +454,6 @@ def apply_rules(rules, sg_aggr, decrement=False):
         "rules": { "comparable_rule": count }
         "dirty": True|False
     """
-
     for rule in rules:
         if rule in sg_aggr.rules:
             count = sg_aggr.rules[rule]

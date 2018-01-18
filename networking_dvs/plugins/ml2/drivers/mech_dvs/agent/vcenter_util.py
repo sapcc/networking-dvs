@@ -272,6 +272,7 @@ class VCenterMonitor(object):
 
     def _run(self):
         LOG.info(_LI("Monitor running... "))
+
         try:
             self.connection = self.connection or _create_session(self.config)
             connection = self.connection
@@ -584,6 +585,28 @@ class VCenter(object):
 
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
+
+    def fetch_ports_by_mac(self, portgroup_key=None, mac_addr=None):
+        for dvs in six.itervalues(self.uuid_dvs_map):
+            builder = SpecBuilder(dvs.connection.vim.client.factory)
+            port_keys = dvs.connection.invoke_api(
+                dvs.connection.vim,
+                'FetchDVPortKeys',
+                dvs._dvs, criteria=builder.port_criteria())
+            ports = dvs.connection.invoke_api(
+                dvs.connection.vim,
+                'FetchDVPorts',
+                dvs._dvs, criteria=builder.port_criteria(port_group_key=portgroup_key, port_key=port_keys))
+
+        for port in ports:
+            if hasattr(port, 'state'):
+                if hasattr(port.state, 'runtimeInfo'):
+                    if mac_addr == port.state.runtimeInfo.macAddress:
+                        return port
+                    else:
+                        continue
+
+            raise Exception('DVS port not found!')
 
     def get_new_ports(self, block=False, timeout=1.0, max_ports=None):
         ports_by_mac = defaultdict(dict)
