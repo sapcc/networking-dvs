@@ -24,6 +24,7 @@ from eventlet.event import Event
 
 import atexit
 import attr
+import copy
 import six
 
 from collections import defaultdict
@@ -160,7 +161,17 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
     vmobref = attr.ib(convert=str, default=None)
     device_key = attr.ib(convert=int, default=None)
     device_type = attr.ib(convert=str, default=None)
+    dvs_thread = attr.ib(default=None)
 
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in six.iteritems(attr.asdict(self)):
+            if k == "dvs_thread":
+                continue
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
 
 class SpecBuilder(spec_builder.SpecBuilder):
     def neutron_to_port_config_spec(self, port):
@@ -273,6 +284,7 @@ class VCenterMonitor(object):
     def _run(self):
         LOG.info(_LI("Monitor running... "))
 
+        self.vc_api = VCenter(self.config, pool=self.pool)
         try:
             self.connection = self.connection or _create_session(self.config)
             connection = self.connection
@@ -298,6 +310,21 @@ class VCenterMonitor(object):
                                 self._handle_virtual_machine(update, now)
 
                 for port_desc in self.changed:
+                    ports_by_mac = defaultdict(dict)
+
+                    port = self.vc_api.mac_port_map.get(port_desc.mac_address, {})
+                    port.update({
+                        'port_desc': port_desc,
+                        'port': {
+                            'binding:vif_details': {
+                                'dvs_port_key': port_desc.port_key,
+                                'dvs_uuid': port_desc.dvs_uuid
+                            }, 'mac_address': port_desc.mac_address}
+                    })
+
+                    ports_by_mac[port_desc.mac_address] = port
+                    port_desc.dvs_thread = eventlet.spawn(self.vc_api.read_dvs_ports, ports_by_mac)
+
                     self._put(self.queue, port_desc)
                 self.changed.clear()
 

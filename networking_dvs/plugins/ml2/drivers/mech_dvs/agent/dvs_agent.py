@@ -299,9 +299,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             ports_by_mac = self.api.get_new_ports(block=False, max_ports=self.conf.DVS.max_ports_per_iteration)
             LOG.debug(_LI("Got {} ports".format(len(ports_by_mac))))
             if ports_by_mac:
-                update_ports_thread = eventlet.spawn(self.api.read_dvs_ports, ports_by_mac)
                 missing = self._read_neutron_ports(ports_by_mac)
-                update_ports_thread.wait()
+                for k, v in six.iteritems(ports_by_mac): v['port_desc'].dvs_thread.wait()
+
                 for mac in missing:
                     ports_by_mac.pop(mac, None)
 
