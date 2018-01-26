@@ -247,7 +247,7 @@ class SpecBuilder(spec_builder.SpecBuilder):
 
 
 class VCenterMonitor(object):
-    def __init__(self, config, connection=None, queue=None, quit_event=None, error_queue=None, pool=None):
+    def __init__(self, vc_api, config, connection=None, queue=None, quit_event=None, error_queue=None, pool=None):
         self._quit_event = quit_event or Event()
         self.changed = set()
         self.queue = queue or Queue()
@@ -264,6 +264,7 @@ class VCenterMonitor(object):
         self.pool = pool or eventlet
         self.config = config
         self.thread = None
+        self.vcenter_api = vc_api
 
     def start(self):
         self.thread = self.pool.spawn(self._run_safe)
@@ -284,7 +285,6 @@ class VCenterMonitor(object):
     def _run(self):
         LOG.info(_LI("Monitor running... "))
 
-        self.vc_api = VCenter(self.config, pool=self.pool)
         try:
             self.connection = self.connection or _create_session(self.config)
             connection = self.connection
@@ -309,10 +309,10 @@ class VCenterMonitor(object):
                             if update.obj._type == 'VirtualMachine':
                                 self._handle_virtual_machine(update, now)
 
+                ports_by_mac = defaultdict(dict)
+                dvs_port_list = []
                 for port_desc in self.changed:
-                    ports_by_mac = defaultdict(dict)
-
-                    port = self.vc_api.mac_port_map.get(port_desc.mac_address, {})
+                    port = self.vcenter_api.mac_port_map.get(port_desc.mac_address, {})
                     port.update({
                         'port_desc': port_desc,
                         'port': {
@@ -323,9 +323,15 @@ class VCenterMonitor(object):
                     })
 
                     ports_by_mac[port_desc.mac_address] = port
-                    port_desc.dvs_thread = eventlet.spawn(self.vc_api.read_dvs_ports, ports_by_mac)
+                    dvs_port_list.append(port_desc)
 
-                    self._put(self.queue, port_desc)
+                dvs_thread = eventlet.spawn(self.vcenter_api.read_dvs_ports, ports_by_mac)
+                for dvs_port_desc in dvs_port_list:
+                    if dvs_port_desc.status != 'deleted':
+                        dvs_port_desc.dvs_thread = dvs_thread
+
+                    self._put(self.queue, dvs_port_desc)
+
                 self.changed.clear()
 
                 now = utcnow()
@@ -547,7 +553,7 @@ class VCenter(object):
         self.pool = pool
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
-        self._monitor_process = VCenterMonitor(self.config, connection=self.connection, pool=self.pool)
+        self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
         self.builder = SpecBuilder(self.connection.vim.client.factory)
 
         self.uuid_port_map = {}
