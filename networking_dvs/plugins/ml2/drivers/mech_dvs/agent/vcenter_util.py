@@ -30,6 +30,7 @@ import six
 from collections import defaultdict
 
 from neutron.i18n import _LI, _LW, _LE
+from neutron.common import topics
 
 from oslo_log import log
 from oslo_utils.timeutils import utcnow
@@ -38,6 +39,7 @@ from oslo_utils import timeutils
 from oslo_vmware import vim_util, exceptions
 from osprofiler.profiler import trace_cls
 
+import dvs_agent
 from networking_dvs.common import config as dvs_config, util as c_util
 from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
@@ -162,13 +164,15 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
     device_key = attr.ib(convert=int, default=None)
     device_type = attr.ib(convert=str, default=None)
     dvs_thread = attr.ib(default=None)
+    neutron_port_thread = attr.ib(default=None)
+    ports_by_mac = attr.ib(default=None)
 
     def __deepcopy__(self, memo):
         cls = self.__class__
         result = cls.__new__(cls)
         memo[id(self)] = result
         for k, v in six.iteritems(attr.asdict(self)):
-            if k == "dvs_thread":
+            if k == "dvs_thread" or k == "neutron_port_thread":
                 continue
             setattr(result, k, copy.deepcopy(v, memo))
         return result
@@ -310,9 +314,14 @@ class VCenterMonitor(object):
                                 self._handle_virtual_machine(update, now)
 
                 ports_by_mac = defaultdict(dict)
+
                 dvs_port_list = []
+                dvs_thread = None
+                neutron_thread = None
+
                 for port_desc in self.changed:
                     port = self.vcenter_api.mac_port_map.get(port_desc.mac_address, {})
+
                     port.update({
                         'port_desc': port_desc,
                         'port': {
@@ -322,14 +331,21 @@ class VCenterMonitor(object):
                             }, 'mac_address': port_desc.mac_address}
                     })
 
-                    ports_by_mac[port_desc.mac_address] = port
-                    dvs_port_list.append(port_desc)
+                    if port_desc.status != 'deleted':
+                        ports_by_mac[port_desc.mac_address] = port
+                        dvs = self.vcenter_api.get_dvs_by_uuid(port_desc.dvs_uuid)
+                        #LOG.debug("PORT DESC>MAC ADDRESS: %s", ports_by_mac[port_desc.mac_address])
+                        if dvs:
+                            dvs.ports_by_key[port_desc.port_key] = port
+                        dvs_port_list.append(port_desc)
 
                 dvs_thread = eventlet.spawn(self.vcenter_api.read_dvs_ports, ports_by_mac)
-                for dvs_port_desc in dvs_port_list:
-                    if dvs_port_desc.status != 'deleted':
-                        dvs_port_desc.dvs_thread = dvs_thread
+                neutron_thread = eventlet.spawn(dvs_agent.dvs_inst._read_neutron_ports, ports_by_mac)
 
+                for dvs_port_desc in dvs_port_list:
+                    dvs_port_desc.dvs_thread = dvs_thread
+                    dvs_port_desc.neutron_port_thread = neutron_thread
+                    dvs_port_desc.ports_by_mac = ports_by_mac
                     self._put(self.queue, dvs_port_desc)
 
                 self.changed.clear()
@@ -555,6 +571,8 @@ class VCenter(object):
         self.connection = _create_session(self.config)
         self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
         self.builder = SpecBuilder(self.connection.vim.client.factory)
+        self.plugin_rpc = dvs_agent.DVSPluginApi(topics.PLUGIN)
+
 
         self.uuid_port_map = {}
         self.mac_port_map = {}
@@ -641,9 +659,18 @@ class VCenter(object):
 
             raise Exception('DVS port not found!')
 
+    def get_port_by_mac(self, mac_address):
+        from neutron.objects.db import api as db_api
+        from neutron import context
+        from neutron.db import models_v2
+        db_result = db_api.get_object(context.get_admin_context(), models_v2.Port, mac_address=mac_address)
+
+        if db_result:
+            return db_result
+
+
     def get_new_ports(self, block=False, timeout=1.0, max_ports=None):
         ports_by_mac = defaultdict(dict)
-
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
                 port_desc = self._monitor_process.queue.get(block=block, timeout=timeout)
