@@ -320,33 +320,32 @@ class VCenterMonitor(object):
                 neutron_thread = None
 
                 for port_desc in self.changed:
-                    port = self.vcenter_api.mac_port_map.get(port_desc.mac_address, {})
-
-                    port.update({
+                    port = {
                         'port_desc': port_desc,
                         'port': {
                             'binding:vif_details': {
                                 'dvs_port_key': port_desc.port_key,
                                 'dvs_uuid': port_desc.dvs_uuid
                             }, 'mac_address': port_desc.mac_address}
-                    })
+                    }
 
                     if port_desc.status != 'deleted':
                         ports_by_mac[port_desc.mac_address] = port
                         dvs = self.vcenter_api.get_dvs_by_uuid(port_desc.dvs_uuid)
-                        #LOG.debug("PORT DESC>MAC ADDRESS: %s", ports_by_mac[port_desc.mac_address])
                         if dvs:
                             dvs.ports_by_key[port_desc.port_key] = port
-                        dvs_port_list.append(port_desc)
+                        dvs_port_list.append(port)
 
                 dvs_thread = eventlet.spawn(self.vcenter_api.read_dvs_ports, ports_by_mac)
                 neutron_thread = eventlet.spawn(dvs_agent.dvs_inst._read_neutron_ports, ports_by_mac)
 
-                for dvs_port_desc in dvs_port_list:
-                    dvs_port_desc.dvs_thread = dvs_thread
-                    dvs_port_desc.neutron_port_thread = neutron_thread
-                    dvs_port_desc.ports_by_mac = ports_by_mac
-                    self._put(self.queue, dvs_port_desc)
+                def queue():
+                    dvs_thread.wait()
+                    neutron_thread.wait()
+
+                    for dvs_port_desc in dvs_port_list:
+                        self._put(self.queue, dvs_port_desc)
+                eventlet.spawn(queue)
 
                 self.changed.clear()
 
@@ -673,7 +672,8 @@ class VCenter(object):
         ports_by_mac = defaultdict(dict)
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
-                port_desc = self._monitor_process.queue.get(block=block, timeout=timeout)
+                new_port = self._monitor_process.queue.get(block=block, timeout=timeout)
+                port_desc = new_port['port_desc']
                 block = False  # Only block on the first item
                 if port_desc.status == 'deleted':
                     ports_by_mac.pop(port_desc.mac_address, None)
@@ -685,21 +685,13 @@ class VCenter(object):
                         dvs.ports_by_key.pop(port_desc.port_key, None)
                 else:
                     port = self.mac_port_map.get(port_desc.mac_address, {})
-                    port.update({
-                        'port_desc': port_desc,
-                        'port': {
-                            'binding:vif_details': {
-                                'dvs_port_key': port_desc.port_key,
-                                'dvs_uuid': port_desc.dvs_uuid
-                            }, 'mac_address': port_desc.mac_address}
-                    })
+                    port.update(dict(new_port))
                     ports_by_mac[port_desc.mac_address] = port
                     dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
                     if dvs:
                         dvs.ports_by_key[port_desc.port_key] = port
         except Empty:
             pass
-
         return ports_by_mac
 
     def read_dvs_ports(self, ports_by_mac):

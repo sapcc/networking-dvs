@@ -294,42 +294,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
     @stats.timed()
     def _scan_ports(self):
-        try:
-            ports_by_mac = self.api.get_new_ports(block=False, max_ports=self.conf.DVS.max_ports_per_iteration)
-            new_port_mac = None
-
-            LOG.debug("PORTS BY MAC: %s", ports_by_mac.keys())
-
-            if ports_by_mac:
-                #missing = self._read_neutron_ports(ports_by_mac)
-                #LOG.debug("MISSING: %s", missing)
-                missing = set([])
-                for k, v in six.iteritems(ports_by_mac):
-                    if hasattr(v['port_desc'], 'dvs_thread') and hasattr(v['port_desc'], 'neutron_port_thread'):
-                        missing = v['port_desc'].neutron_port_thread.wait()
-                        v['port_desc'].dvs_thread.wait()
-
-                        if new_port_mac == None:
-                            new_port_mac = v['port_desc'].ports_by_mac
-                        break
-                ports_by_mac = new_port_mac
-                for mac in missing:
-                    ports_by_mac.pop(mac, None)
-
-            new_ports_by_mac = []
-            for p in ports_by_mac.values():
-                new_ports_by_mac.append(p['port_desc'].ports_by_mac[p['mac_address']])
-
-
-            return new_ports_by_mac
-            #return ports_by_mac.values()
-        except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError):
-            LOG.exception(_LE("Failed to get ports via RPC"))
-            return []
+        return self.api.get_new_ports(block=False, max_ports=self.conf.DVS.max_ports_per_iteration).values()
 
     def _read_neutron_ports(self, ports_by_mac):
         macs = set(six.iterkeys(ports_by_mac))
-
         if macs:
             with stats.timed('%s.%s' % (self.__module__, self.__class__.__name__)):
                 neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
@@ -355,6 +323,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                         self.api.uuid_port_map[port_id] = port_info
         if macs:
             LOG.warning(_LW("Could not find the following macs: {}").format(macs))
+
         return macs
 
     def loop_count_and_wait(self, elapsed):
@@ -377,9 +346,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         with timeutils.StopWatch() as w:
             for port_key in succeeded_keys:
                 port = dvs.ports_by_key.get(port_key, None)
-                LOG.debug("BBBBBBBBBBBBBBBBBBBBB: %s", port)
-                #LOG.debug("PORT: %s", port['port_desc'].mac_address)
-                port = port['port_desc'].ports_by_mac[port['port_desc'].mac_address]
                 if not port:
                     LOG.debug("Port with key {} has already been removed.".format(port_key))
                     continue
@@ -426,16 +392,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
-
         ports_to_bind = list(self.api.uuid_port_map[port_id] for port_id in six.iterkeys(updated_ports))
-        LOG.debug("FOUND PORTS: %s", found_ports)
+
         ports_to_skip = collections.defaultdict(list)
 
         for port in found_ports:
             port_segmentation_id = port.get('segmentation_id', None)
             port_network_type = port.get('network_type', None)
             port_vlan_id = port['port_desc'].vlan_id
-            LOG.debug("PORT FINAL: %s", port)
             if not port.get('port_id', None):
                 # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
                 # or vms not managed by openstack
@@ -472,7 +436,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         known_ids = six.viewkeys(self.known_ports)
         for port in found_ports:
             port_id = port.get("port_id", None)
-            LOG.debug("IDDDDDDDDDDDDDDDDDDDDDDDDD:%s", port_id)
             if not port_id:
                 continue
             if port_id not in known_ids:
