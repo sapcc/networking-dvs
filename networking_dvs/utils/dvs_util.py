@@ -87,7 +87,6 @@ def dvportgroup_name(uuid, sg_set):
 
 
 def _config_differs(current, update):
-
     if current.__class__ != update.__class__:
         return True
 
@@ -126,11 +125,7 @@ def _config_differs(current, update):
             pass
         except TypeError, e:
             if value != new_value:
-                LOG.error(e)
-                LOG.error(name)
-                LOG.error(value)
-                LOG.error(new_value)
-                return False
+                return True
 
     return False
 
