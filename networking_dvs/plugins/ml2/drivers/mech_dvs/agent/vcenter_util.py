@@ -24,13 +24,14 @@ from eventlet.event import Event
 
 import atexit
 import attr
-import copy
 import six
 
 from collections import defaultdict
 
 from neutron.i18n import _LI, _LW, _LE
-from neutron.common import topics
+from neutron.db import models_v2
+from neutron.plugins.ml2 import models as models_ml2
+import neutron.context
 
 from oslo_log import log
 from oslo_utils.timeutils import utcnow
@@ -39,8 +40,7 @@ from oslo_utils import timeutils
 from oslo_vmware import vim_util, exceptions
 from osprofiler.profiler import trace_cls
 
-import dvs_agent
-from networking_dvs.common import config as dvs_config, util as c_util
+from networking_dvs.common import config as dvs_config, util as c_util, constants
 from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder
 
@@ -163,19 +163,7 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
     vmobref = attr.ib(convert=str, default=None)
     device_key = attr.ib(convert=int, default=None)
     device_type = attr.ib(convert=str, default=None)
-    dvs_thread = attr.ib(default=None)
-    neutron_port_thread = attr.ib(default=None)
-    ports_by_mac = attr.ib(default=None)
 
-    def __deepcopy__(self, memo):
-        cls = self.__class__
-        result = cls.__new__(cls)
-        memo[id(self)] = result
-        for k, v in six.iteritems(attr.asdict(self)):
-            if k == "dvs_thread" or k == "neutron_port_thread":
-                continue
-            setattr(result, k, copy.deepcopy(v, memo))
-        return result
 
 class SpecBuilder(spec_builder.SpecBuilder):
     def neutron_to_port_config_spec(self, port):
@@ -251,11 +239,9 @@ class SpecBuilder(spec_builder.SpecBuilder):
 
 
 class VCenterMonitor(object):
-    def __init__(self, vc_api, config, connection=None, queue=None, quit_event=None, error_queue=None, pool=None):
+    def __init__(self, vc_api, config, connection=None, quit_event=None, pool=None):
         self._quit_event = quit_event or Event()
         self.changed = set()
-        self.queue = queue or Queue()
-        self.error_queue = error_queue
         self._property_collector = None
         self.down_ports = {}
         self.untried_ports = {}  # The host is simply down
@@ -313,41 +299,10 @@ class VCenterMonitor(object):
                             if update.obj._type == 'VirtualMachine':
                                 self._handle_virtual_machine(update, now)
 
-                ports_by_mac = defaultdict(dict)
-
-                dvs_port_list = []
-                dvs_thread = None
-                neutron_thread = None
-
-                for port_desc in self.changed:
-                    port = {
-                        'port_desc': port_desc,
-                        'port': {
-                            'binding:vif_details': {
-                                'dvs_port_key': port_desc.port_key,
-                                'dvs_uuid': port_desc.dvs_uuid
-                            }, 'mac_address': port_desc.mac_address}
-                    }
-
-                    if port_desc.status != 'deleted':
-                        ports_by_mac[port_desc.mac_address] = port
-                        dvs = self.vcenter_api.get_dvs_by_uuid(port_desc.dvs_uuid)
-                        if dvs:
-                            dvs.ports_by_key[port_desc.port_key] = port
-                        dvs_port_list.append(port)
-
-                dvs_thread = eventlet.spawn(self.vcenter_api.read_dvs_ports, ports_by_mac)
-                neutron_thread = eventlet.spawn(dvs_agent.dvs_inst._read_neutron_ports, ports_by_mac)
-
-                def queue():
-                    dvs_thread.wait()
-                    neutron_thread.wait()
-
-                    for dvs_port_desc in dvs_port_list:
-                        self._put(self.queue, dvs_port_desc)
-                eventlet.spawn(queue)
-
-                self.changed.clear()
+                changed = self.changed
+                self.changed = set()
+                if changed:
+                    eventlet.spawn(self.vcenter_api.vcenter_port_changes, changed)
 
                 now = utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
@@ -544,16 +499,6 @@ class VCenterMonitor(object):
                 LOG.debug(
                     "Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
-                if status == 'unrecoverableError' and self.error_queue:
-                    self._put(self.error_queue, port_desc)
-
-    def _put(self, queue, port_desc):
-        while not self._quit_event.ready():
-            try:
-                queue.put_nowait(port_desc)
-            except Full:
-                continue
-            break
 
 
 @trace_cls("vmwareapi")
@@ -564,14 +509,15 @@ class VCenter(object):
     # Subsequentally, the mac has to be identified with a port
     #
 
-    def __init__(self, config=None, pool=None):
+    def __init__(self, config=None, pool=None, agent=None):
         self.pool = pool
+        self.agent = agent
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
+        self.context = None
         self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
         self.builder = SpecBuilder(self.connection.vim.client.factory)
-        self.plugin_rpc = dvs_agent.DVSPluginApi(topics.PLUGIN)
-
+        self.queue = Queue(None)
 
         self.uuid_port_map = {}
         self.mac_port_map = {}
@@ -583,6 +529,77 @@ class VCenter(object):
                 dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
+
+    def vcenter_port_changes(self, changed):
+        ports_by_mac = defaultdict(dict)
+
+        dvs_port_list = []
+        for port_desc in changed:
+            port = {
+                'port_desc': port_desc,
+                'port': {
+                    'binding:vif_details': {
+                        'dvs_port_key': port_desc.port_key,
+                        'dvs_uuid': port_desc.dvs_uuid
+                    }, 'mac_address': port_desc.mac_address}
+            }
+
+            if port_desc.status != 'deleted':
+                ports_by_mac[port_desc.mac_address] = port
+                dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
+                if dvs:
+                    dvs.ports_by_key[port_desc.port_key] = port
+                dvs_port_list.append(port)
+
+        dvs_thread = eventlet.spawn(self.read_dvs_ports, ports_by_mac)
+        macs = set(six.iterkeys(ports_by_mac))
+        neutron_thread = None # eventlet.spawn(self.agent.read_neutron_ports, macs)
+
+        for port_id, mac, status, admin_state_up, network_id, network_type, segmentation_id in self.get_ports_by_mac(macs):
+            macs.discard(mac)
+            port_info = ports_by_mac[mac]
+            neutron_info = {
+                "port_id": port_id,
+                "id": port_id,
+                "device": port_id,
+                "mac_address": mac,
+                "admin_state_up": admin_state_up,
+                "status": status,
+                "network_id": network_id,
+                "network_type": network_type,
+                "segmentation_id": segmentation_id,
+            }
+
+            port_info["port"]["id"] = port_id
+            c_util.dict_merge(port_info, neutron_info)
+            self.uuid_port_map[port_id] = port_info
+
+        if neutron_thread:
+            neutron_ports = neutron_thread.wait()
+            if neutron_ports:
+                for neutron_info in neutron_ports:
+                    if neutron_info:
+                        # device <=> mac_address are the same, but mac_address is missing, when there is no data
+
+                        mac = neutron_info.get("mac_address", None)
+                        macs.discard(mac)
+                        port_info = ports_by_mac.get(mac, None)
+
+                        if port_info:
+                            port_id = neutron_info.get("port_id", None)
+                            if port_id:
+                                port_info["port"]["id"] = port_id
+                                c_util.dict_merge(port_info, neutron_info)
+
+                                self.uuid_port_map[port_id] = port_info
+
+        if macs:
+            LOG.warning(_LW("Could not find the following macs: {}").format(macs))
+
+        dvs_thread.wait()
+
+        for dvs_port_desc in dvs_port_list:
+            self.queue.put(dvs_port_desc)
 
     def start(self):
         self._monitor_process.start()
@@ -658,21 +675,11 @@ class VCenter(object):
 
             raise Exception('DVS port not found!')
 
-    def get_port_by_mac(self, mac_address):
-        from neutron.objects.db import api as db_api
-        from neutron import context
-        from neutron.db import models_v2
-        db_result = db_api.get_object(context.get_admin_context(), models_v2.Port, mac_address=mac_address)
-
-        if db_result:
-            return db_result
-
-
     def get_new_ports(self, block=False, timeout=1.0, max_ports=None):
         ports_by_mac = defaultdict(dict)
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
-                new_port = self._monitor_process.queue.get(block=block, timeout=timeout)
+                new_port = self.queue.get(block=block, timeout=timeout)
                 port_desc = new_port['port_desc']
                 block = False  # Only block on the first item
                 if port_desc.status == 'deleted':
@@ -706,12 +713,32 @@ class VCenter(object):
                     ports_by_mac.pop(port_desc.mac_address)
         LOG.debug("Read all ports")
 
+    def get_ports_by_mac(self, mac_addresses):
+        if not mac_addresses:
+            return []
+
+        if not self.context:
+            self.context = neutron.context.get_admin_context()
+
+        session = self.context.session
+        with session.begin(subtransactions=True):
+            return session.query(models_v2.Port.id, models_v2.Port.mac_address, models_v2.Port.status, models_v2.Port.admin_state_up,
+                                 models_ml2.NetworkSegment.network_id,
+                                 models_ml2.NetworkSegment.network_type,
+                                 models_ml2.NetworkSegment.segmentation_id).\
+                 join(models_ml2.PortBindingLevel, models_v2.Port.id == models_ml2.PortBindingLevel.port_id).\
+                 join(models_ml2.NetworkSegment, models_ml2.PortBindingLevel.segment_id == models_ml2.NetworkSegment.id).\
+                 filter(models_ml2.PortBindingLevel.host == self.agent.conf.host,
+                        models_ml2.PortBindingLevel.driver == constants.DVS,
+                        models_v2.Port.mac_address.in_(mac_addresses),
+                        ).all()
+
     def stop(self):
         self._monitor_process.stop()
 
         try:
             while True:
-                self._monitor_process.queue.get_nowait()
+                self.queue.get_nowait()
         except Empty:
             pass
 
