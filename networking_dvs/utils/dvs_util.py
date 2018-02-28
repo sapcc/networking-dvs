@@ -25,6 +25,7 @@ from oslo_log import log
 from oslo_utils import timeutils
 from requests.exceptions import ConnectionError
 from time import sleep
+from eventlet.greenpool import GreenPool as Pool
 
 from networking_dvs.common import config
 from networking_dvs.common import constants as dvs_const
@@ -456,6 +457,10 @@ class DVSController(object):
         for dvpg in six.itervalues(portgroups):
             description = dvpg["description"]
             if description == security_group_set:
+                async_fetch = dvpg.get("asyncFetch", None)
+                if async_fetch:
+                    LOG.warning("Blocking on port-group %s", security_group_set)
+                    async_fetch.wait()
                 return dvpg
 
     def _get_portgroups(self, max_objects=100, refresh=False):
@@ -480,7 +485,7 @@ class DVSController(object):
         property_spec = vim_util.build_property_spec(
             vim.client.factory,
             "DistributedVirtualPortgroup",
-            ["key", "name", "config.description", "config.configVersion", "config.defaultPortConfig"])
+            ["key", "name", "config.description"])
 
         property_filter_spec = vim_util.build_property_filter_spec(
             vim.client.factory,
@@ -492,13 +497,30 @@ class DVSController(object):
         pc_result = vim.RetrievePropertiesEx(property_collector, specSet=[property_filter_spec],
                                              options=options)
 
+        def _fetch(props):
+            result = self.connection.invoke_api(vim_util, 'get_object_properties_dict', self.connection.vim, props["ref"],
+                                                ["config.configVersion", "config.defaultPortConfig"])
+            config_version = result.pop("config.configVersion", None)
+            if config_version:
+                props["configVersion"] = int(config_version)
+            default_port_config = result.pop("config.defaultPortConfig", None)
+            if default_port_config:
+                props["defaultPortConfig"] = default_port_config
+            props.pop("asyncFetch", None)
+
         with vim_util.WithRetrieval(vim, pc_result) as pc_objects:
             for objContent in pc_objects:
                 props = {prop.name: prop.val for prop in objContent.propSet}
                 props["ref"] = objContent.obj
-                props["configVersion"] = int(props.pop("config.configVersion", 0))
                 props["description"] = str(props.pop("config.description", ""))
-                props["defaultPortConfig"] = props.pop("config.defaultPortConfig", None)
+                config_version = props.pop("config.configVersion", None)
+                if config_version:
+                    props["configVersion"] = int(config_version)
+                default_port_config = props.pop("config.defaultPortConfig", None)
+                if default_port_config:
+                    props["defaultPortConfig"] = default_port_config
+                if not props.get("configVersion") or not props.get("defaultPortConfig"):
+                    props["asyncFetch"] = self.pool.spawn(_fetch, props)
                 self._port_groups_by_name[props["name"]] = props
 
         return self._port_groups_by_name
