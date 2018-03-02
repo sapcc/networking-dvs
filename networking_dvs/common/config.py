@@ -65,8 +65,8 @@ dvs_opts = [
                default=0,
                help=_("Create a profile trace for every nth iteration (if profiling is enabled)")),
     cfg.IntOpt('max_ports_per_iteration',
-               default=10,
-               help=_("Precreate networks on DVS")),
+               default=5,
+               help=_("Number of ports to get per iteration")),
 ]
 
 cfg.CONF.register_opts(dvs_opts, "DVS")

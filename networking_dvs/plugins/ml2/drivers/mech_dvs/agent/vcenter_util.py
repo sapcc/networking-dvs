@@ -22,7 +22,6 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
 
-import atexit
 import attr
 import six
 
@@ -37,30 +36,21 @@ from oslo_log import log
 from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_utils import timeutils
-from oslo_vmware import vim_util, exceptions
+from pyVmomi import vim, vmodl
+
 from osprofiler.profiler import trace_cls
 
 from networking_dvs.common import config as dvs_config, util as c_util, constants
 from networking_dvs.utils import dvs_util
-from networking_dvs.utils import spec_builder
+from networking_dvs.utils import spec_builder as builder
 
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
 
-class RequestCanceledException(exceptions.VimException):
-    msg_fmt = _("The task was canceled by a user.")
-    code = 200
-
-
-exceptions.register_fault_class('RequestCanceled', RequestCanceledException)
-
-
 def _create_session(config):
     """Create Vcenter Session for API Calling."""
-    kwargs = {'create_session': True}
-    connection = dvs_util.connect(config, **kwargs)
-    atexit.register(connection.logout)
+    connection = dvs_util.connect(config)
     return connection
 
 
@@ -72,18 +62,10 @@ def _cast(value, _type=str):
 
 def get_all_cluster_mors(connection):
     """Get all the clusters in the vCenter."""
-    try:
-        results = connection.invoke_api(vim_util, "get_objects", connection.vim,
-                                        "ClusterComputeResource", 100, ["name"])
-        connection.invoke_api(vim_util, 'cancel_retrieval', connection.vim, results)
-        if results.objects is None:
-            return []
-        else:
-            return results.objects
-
-    except Exception as excep:
-        LOG.warning(_LW("Failed to get cluster references %s"), excep)
-        return []
+    query = c_util.get_objects(connection, vim.ClusterComputeResource, 100, ["name"])
+    with c_util.WithRetrieval(connection, query) as compute_resources:
+        for mor in compute_resources:
+            yield mor
 
 
 def get_cluster_ref_by_name(connection, cluster_name):
@@ -165,79 +147,6 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
     device_type = attr.ib(convert=str, default=None)
 
 
-class SpecBuilder(spec_builder.SpecBuilder):
-    def neutron_to_port_config_spec(self, port):
-        port_desc = port['port_desc']
-        setting = self.port_setting()
-        if port["segmentation_id"]:
-            setting.vlan = self.vlan(port["segmentation_id"])
-        else:
-            setting.vlan = self.vlan(0)
-        setting.blocked = self.blocked(not port["admin_state_up"])
-        setting.filterPolicy = self.filter_policy(None)
-
-        return self.port_config_spec(version=port_desc.config_version,
-                                     key=port_desc.port_key,
-                                     setting=setting,
-                                     name=port["port_id"],
-                                     description="Neutron port for network {}".format(port["network_id"]))
-
-    def wait_options(self, max_wait_seconds=None, max_object_updates=None):
-        wait_options = self.factory.create('ns0:WaitOptions')
-
-        if max_wait_seconds:
-            wait_options.maxWaitSeconds = max_wait_seconds
-
-        if max_object_updates:
-            wait_options.maxObjectUpdates = max_object_updates
-
-        return wait_options
-
-    def virtual_device_connect_info(self, allow_guest_control, connected, start_connected):
-        virtual_device_connect_info = self.factory.create('ns0:VirtualDeviceConnectInfo')
-
-        virtual_device_connect_info.allowGuestControl = allow_guest_control
-        virtual_device_connect_info.connected = connected
-        virtual_device_connect_info.startConnected = start_connected
-
-        return virtual_device_connect_info
-
-    def distributed_virtual_switch_port_connection(self, switch_uuid, port_key=None, portgroup_key=None):
-        # connectionCookie is left out intentionally, it cannot be set
-        distributed_virtual_switch_port_connection = self.factory.create('ns0:DistributedVirtualSwitchPortConnection')
-        distributed_virtual_switch_port_connection.switchUuid = switch_uuid
-
-        if port_key:
-            distributed_virtual_switch_port_connection.portKey = port_key
-        if portgroup_key:
-            distributed_virtual_switch_port_connection.portgroupKey = portgroup_key
-
-        return distributed_virtual_switch_port_connection
-
-    def virtual_device_config_spec(self, device, file_operation=None, operation=None, profile=None):
-        virtual_device_config_spec = self.factory.create('ns0:VirtualDeviceConfigSpec')
-        virtual_device_config_spec.device = device
-
-        if file_operation:
-            virtual_device_config_spec.fileOperation = file_operation
-        if operation:
-            virtual_device_config_spec.operation = operation
-        if profile:
-            virtual_device_config_spec.profile = profile
-
-        return virtual_device_config_spec
-
-    def virtual_machine_config_spec(self, device_change=None, change_version=None):
-        virtual_machine_config_spec = self.factory.create('ns0:VirtualMachineConfigSpec')
-
-        if device_change:
-            virtual_machine_config_spec.deviceChange = device_change
-        if change_version:
-            virtual_machine_config_spec.changeVersion = change_version
-
-        return virtual_machine_config_spec
-
-
 class VCenterMonitor(object):
     def __init__(self, vc_api, config, connection=None, quit_event=None, pool=None):
         self._quit_event = quit_event or Event()
@@ -251,13 +160,13 @@ class VCenterMonitor(object):
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
         # super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
-        self.pool = pool or eventlet
+        self.pool = pool or eventlet.greenpool.GreenPool(5)
         self.config = config
         self.thread = None
         self.vcenter_api = vc_api
 
     def start(self):
-        self.thread = self.pool.spawn(self._run_safe)
+        self.thread = eventlet.spawn(self._run_safe)
 
     def stop(self):
         try:
@@ -268,8 +177,8 @@ class VCenterMonitor(object):
         # This will abort the WaitForUpdateEx early, so it will cancel leave the loop timely
         if self.connection and self.property_collector:
             try:
-                self.connection.invoke_api(self.connection.vim, 'CancelWaitForUpdates', self.property_collector)
-            except exceptions.VimException:
+                self.property_collector.CancelWaitForUpdates()
+            except vim.fault.VimFault:
                 pass
 
     def _run(self):
@@ -278,8 +187,6 @@ class VCenterMonitor(object):
         try:
             self.connection = self.connection or _create_session(self.config)
             connection = self.connection
-            vim = connection.vim
-            builder = SpecBuilder(vim.client.factory)
 
             version = None
             wait_options = builder.wait_options(60, 20)
@@ -288,21 +195,20 @@ class VCenterMonitor(object):
             self._create_property_filter(self.property_collector)
 
             while not self._quit_event.ready():
-                result = connection.invoke_api(vim, 'WaitForUpdatesEx', self.property_collector,
-                                               version=version, options=wait_options)
+                result = self.property_collector.WaitForUpdatesEx(version=version, options=wait_options)
                 self.iteration += 1
                 if result:
                     version = result.version
                     if result.filterSet and result.filterSet[0].objectSet:
                         now = utcnow()
                         for update in result.filterSet[0].objectSet:
-                            if update.obj._type == 'VirtualMachine':
+                            if isinstance(update.obj, vim.VirtualMachine):
                                 self._handle_virtual_machine(update, now)
 
                 changed = self.changed
                 self.changed = set()
                 if changed:
-                    eventlet.spawn(self.vcenter_api.vcenter_port_changes, changed)
+                    self.vcenter_api.vcenter_port_changes(changed)
 
                 now = utcnow()
                 for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
@@ -310,14 +216,11 @@ class VCenterMonitor(object):
                         LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
                                                                     (now - when).total_seconds(), port_desc.status))
                 eventlet.sleep(0)
-        except RequestCanceledException as e:
+        except vmodl.fault.RequestCanceled as e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
                 LOG.info("Waiting for updates was cancelled unexpectedly")
                 raise e  # This will kill the whole process and we start again from scratch
-        finally:
-            if self.connection:
-                self.connection.logout()
 
     def _run_safe(self):
         while not self._quit_event.ready():
@@ -330,41 +233,35 @@ class VCenterMonitor(object):
 
     def _create_property_filter(self, property_collector):
         connection = self.connection
-        vim = connection.vim
-        service_content = vim.service_content
-        client_factory = vim.client.factory
 
         if not self.config.cluster_name:
             LOG.info("No cluster specified")
-            container = service_content.rootFolder
+            container = connection.content.rootFolder
         else:
             container = get_cluster_ref_by_name(connection, self.config.cluster_name)
             if not container:
                 LOG.error(_LE("Cannot find cluster with name '{}'").format(self.config.cluster_name))
                 exit(2)
 
-        container_view = connection.invoke_api(vim, 'CreateContainerView', service_content.viewManager,
+        container_view = connection.content.viewManager.CreateContainerView(
                                                container=container,
-                                               type=['VirtualMachine'],
+                                               type=[vim.VirtualMachine],
                                                recursive=True)
 
-        traversal_spec = vim_util.build_traversal_spec(client_factory, 'traverseEntities', 'ContainerView', 'view',
+        traversal_spec = c_util.build_traversal_spec('traverseEntities', vim.ContainerView, 'view',
                                                        False, None)
-        object_spec = vim_util.build_object_spec(client_factory, container_view, [traversal_spec])
+        object_spec = c_util.build_object_spec(container_view, [traversal_spec])
 
         # Only static types work, so we have to get all hardware, still faster than retrieving individual items
         vm_properties = ['runtime.powerState', 'config.hardware.device']
-        property_specs = [vim_util.build_property_spec(client_factory, 'VirtualMachine', vm_properties)]
+        property_specs = [c_util.build_property_spec(vim.VirtualMachine, vm_properties)]
 
-        property_filter_spec = vim_util.build_property_filter_spec(client_factory, property_specs, [object_spec])
+        property_filter_spec = c_util.build_property_filter_spec(property_specs, [object_spec])
 
-        return connection.invoke_api(vim, 'CreateFilter', property_collector, spec=property_filter_spec,
-                                     partialUpdates=True)  # -> PropertyFilter
+        return property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
 
     def _create_property_collector(self):
-        vim = self.connection.vim
-        _property_collector = self.connection.invoke_api(vim, 'CreatePropertyCollector',
-                                                         vim.service_content.propertyCollector)
+        _property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
 
         return _property_collector
 
@@ -380,7 +277,7 @@ class VCenterMonitor(object):
                 self.changed.add(port_desc)
 
     def _handle_virtual_machine(self, update, now):
-        vmobref = str(update.obj.value)  # String 'vmobref-#'
+        vmobref = str(update.obj._moId) # String 'vmobref-#'
         change_set = getattr(update, 'changeSet', [])
 
         if update.kind != 'leave':
@@ -393,7 +290,7 @@ class VCenterMonitor(object):
                 LOG.debug("Change name {} has no value.".format(change_name))
             if change_name == "config.hardware.device":
                 if "assign" == change.op:
-                    for v in change_val[0]:
+                    for v in change_val:
                         port_desc = self._port_desc_from_nic_change(vmobref, v)
                         if port_desc:
                             vm_hw[port_desc.device_key] = port_desc
@@ -506,7 +403,7 @@ class VCenter(object):
     # PropertyCollector discovers changes on vms and their hardware and produces
     #    (mac, switch, portKey, portGroupKey, connectable.connected, connectable.status)
     #    internally, it keeps internally vm and key for identifying updates
-    # Subsequentally, the mac has to be identified with a port
+    # Subsequently, the mac has to be identified with a port
     #
 
     def __init__(self, config=None, pool=None, agent=None):
@@ -516,7 +413,6 @@ class VCenter(object):
         self.connection = _create_session(self.config)
         self.context = None
         self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
-        self.builder = SpecBuilder(self.connection.vim.client.factory)
         self.queue = Queue(None)
 
         self.uuid_port_map = {}
@@ -533,7 +429,6 @@ class VCenter(object):
     def vcenter_port_changes(self, changed):
         ports_by_mac = defaultdict(dict)
 
-        dvs_port_list = []
         for port_desc in changed:
             port = {
                 'port_desc': port_desc,
@@ -544,17 +439,21 @@ class VCenter(object):
                     }, 'mac_address': port_desc.mac_address}
             }
 
+            dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
+            if not dvs:
+                continue
+
             if port_desc.status != 'deleted':
+                dvs.ports_by_key[port_desc.port_key] = port
                 ports_by_mac[port_desc.mac_address] = port
-                dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-                if dvs:
-                    dvs.ports_by_key[port_desc.port_key] = port
-                dvs_port_list.append(port)
+            else:
+                dvs.ports_by_key.pop(port_desc.port_key, None)
+                ports_by_mac.pop(port_desc.mac_address, None)
 
-        dvs_thread = eventlet.spawn(self.read_dvs_ports, ports_by_mac)
+        # self.read_dvs_ports(ports_by_mac) Skip that
         macs = set(six.iterkeys(ports_by_mac))
-        neutron_thread = None # eventlet.spawn(self.agent.read_neutron_ports, macs)
 
+        port_list = []
         for port_id, mac, status, admin_state_up, network_id, network_type, segmentation_id in self.get_ports_by_mac(macs):
             macs.discard(mac)
             port_info = ports_by_mac[mac]
@@ -573,32 +472,13 @@ class VCenter(object):
             port_info["port"]["id"] = port_id
             c_util.dict_merge(port_info, neutron_info)
             self.uuid_port_map[port_id] = port_info
-
-        if neutron_thread:
-            neutron_ports = neutron_thread.wait()
-            if neutron_ports:
-                for neutron_info in neutron_ports:
-                    if neutron_info:
-                        # device <=> mac_address are the same, but mac_address is missing, when there is no data
-
-                        mac = neutron_info.get("mac_address", None)
-                        macs.discard(mac)
-                        port_info = ports_by_mac.get(mac, None)
-
-                        if port_info:
-                            port_id = neutron_info.get("port_id", None)
-                            if port_id:
-                                port_info["port"]["id"] = port_id
-                                c_util.dict_merge(port_info, neutron_info)
-
-                                self.uuid_port_map[port_id] = port_info
+            port_list.append(port_info)
 
         if macs:
             LOG.warning(_LW("Could not find the following macs: {}").format(macs))
 
-        dvs_thread.wait()
-
-        for dvs_port_desc in dvs_port_list:
+        LOG.debug("Got port information from db for %d ports", len(port_list))
+        for dvs_port_desc in port_list:
             self.queue.put(dvs_port_desc)
 
     def start(self):
@@ -639,7 +519,7 @@ class VCenter(object):
             for port in six.itervalues(ports_by_key):
                 if (port["network_type"] == "vlan" and not port["segmentation_id"] is None) \
                         or port["network_type"] == "flat":
-                    spec = self.builder.neutron_to_port_config_spec(port)
+                    spec = builder.neutron_to_port_config_spec(port)
                     if not CONF.AGENT.dry_run:
                         specs.append(spec)
                     else:
@@ -655,15 +535,10 @@ class VCenter(object):
 
     def fetch_ports_by_mac(self, portgroup_key=None, mac_addr=None):
         for dvs in six.itervalues(self.uuid_dvs_map):
-            builder = SpecBuilder(dvs.connection.vim.client.factory)
-            port_keys = dvs.connection.invoke_api(
-                dvs.connection.vim,
-                'FetchDVPortKeys',
-                dvs._dvs, criteria=builder.port_criteria())
-            ports = dvs.connection.invoke_api(
-                dvs.connection.vim,
-                'FetchDVPorts',
-                dvs._dvs, criteria=builder.port_criteria(port_group_key=portgroup_key, port_key=port_keys))
+            port_keys = dvs._dvs.FetchDVPortKeys(dvs._dvs, criteria=builder.port_criteria())
+            ports = dvs._dvs.FetchDVPorts(criteria=builder.port_criteria(
+                port_group_key=portgroup_key, port_key=port_keys)
+            )
 
         for port in ports:
             if hasattr(port, 'state'):
@@ -777,15 +652,8 @@ def main():
     print(w.elapsed())
 
     for dvs in six.itervalues(util.uuid_dvs_map):
-        builder = SpecBuilder(dvs.connection.vim.client.factory)
-        port_keys = dvs.connection.invoke_api(
-            dvs.connection.vim,
-            'FetchDVPortKeys',
-            dvs._dvs, criteria=builder.port_criteria())
-        ports = dvs.connection.invoke_api(
-            dvs.connection.vim,
-            'FetchDVPorts',
-            dvs._dvs, criteria=builder.port_criteria(port_key=port_keys))
+        port_keys = dvs._dvs.FetchDVPortKeys(criteria=builder.port_criteria())
+        ports = dvs._dvs.FetchDVPorts(criteria=builder.port_criteria(port_key=port_keys))
 
         configs = []
         for port in ports:

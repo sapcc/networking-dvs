@@ -14,11 +14,10 @@ from collections import defaultdict, Counter
 from neutron.agent import firewall
 from neutron.i18n import _LE
 from oslo_log import log as logging
-from oslo_vmware import exceptions as vmware_exceptions
-from oslo_vmware import vim_util
+from pyVmomi import vim, vmodl
 from osprofiler.profiler import trace_cls
 from networking_dvs.common import config
-from networking_dvs.utils import security_group_utils as sg_util
+from networking_dvs.utils import security_group_utils as sg_util, spec_builder as builder
 from networking_dvs.common.util import dict_merge, stats
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent.vcenter_util import VCenter
 
@@ -137,9 +136,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
-        client_factory = dvs.connection.vim.client.factory
-        builder = sg_util.PortConfigSpecBuilder(client_factory)
-
         if not sg_aggr.dirty:
             if sg_aggr.pg_key:
                 self._reassign_ports(sg_aggr)
@@ -152,7 +148,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         sg_set_rules = sg_util.get_rules(sg_aggr)
 
         port_config = builder.port_setting()
-        port_config.filterPolicy = sg_util.filter_policy(builder, sg_rules=sg_set_rules)
+        port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
         if sg_aggr.vlan:
             port_config.vlan = builder.vlan(sg_aggr.vlan)
 
@@ -215,35 +211,35 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 continue
             dvs_uuid = port_desc.dvs_uuid
             dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-            client_factory = dvs.connection.vim.client.factory
 
             # Configure the backing to the required dvportgroup
-            port_connection = client_factory.create('ns0:DistributedVirtualSwitchPortConnection')
+            port_connection = vim.DistributedVirtualSwitchPortConnection()
             port_connection.switchUuid = dvs_uuid
             port_connection.portgroupKey = sg_aggr.pg_key
-            port_backing = client_factory.create('ns0:VirtualEthernetCardDistributedVirtualPortBackingInfo')
+            port_backing = vim.VirtualEthernetCardDistributedVirtualPortBackingInfo()
             port_backing.port = port_connection
 
             # Specify the device that we are going to edit
-            virtual_device = client_factory.create('ns0:' + port_desc.device_type)
+            virtual_device = getattr(vim, port_desc.device_type)()
             virtual_device.key = port_desc.device_key
             virtual_device.backing = port_backing
             virtual_device.addressType = "manual"
             virtual_device.macAddress = port_desc.mac_address
 
             # Create an edit spec for an existing virtual device
-            virtual_device_config_spec = client_factory.create('ns0:VirtualDeviceConfigSpec')
+            virtual_device_config_spec = vim.VirtualDeviceConfigSpec()
             virtual_device_config_spec.operation = "edit"
             virtual_device_config_spec.device = virtual_device
 
             # Create a config spec for applying the update to the virtual machine
-            vm_config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+            vm_config_spec = vim.VirtualMachineConfigSpec()
             vm_config_spec.deviceChange = [virtual_device_config_spec]
 
             # Queue the update
-            vm_ref = vim_util.get_moref(port_desc.vmobref, "VirtualMachine")
+            vm_ref = vim.VirtualMachine(port_desc.vmobref)
+            vm_ref._stub = self.dvs.connection._stub
             if not CONF.AGENT.dry_run:
-                self._green.spawn_n(reconfig_vm, dvs, vm_ref, vm_config_spec)
+                self._green.spawn_n(reconfig_vm, vm_ref, vm_config_spec)
             else:
                 LOG.debug("Reassign: %s", vm_config_spec)
 
@@ -268,13 +264,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
 
 @stats.timed()
-def reconfig_vm(dvs, vm_ref, vm_config_spec):
+def reconfig_vm(vm_ref, vm_config_spec):
     try:
-        dvs.connection.invoke_api(dvs.connection.vim,
-                                  "ReconfigVM_Task",
-                                  vm_ref,
-                                  spec=vm_config_spec)
-    except vmware_exceptions.VimException as e:
+        vm_ref.ReconfigVM_Task(spec=vm_config_spec)
+    except vim.fault.VimFault as e:
         LOG.info("Unable to reassign VM, exception is %s.", e)
 
 

@@ -23,9 +23,10 @@ import six
 from ipaddress import ip_network, collapse_addresses
 from neutron.i18n import _LI
 from oslo_log import log
+from pyVmomi import vim, vmodl
 
 from networking_dvs.common import constants as dvs_const
-from networking_dvs.utils import spec_builder
+from networking_dvs.utils import spec_builder as builder
 
 LOG = log.getLogger(__name__)
 
@@ -84,34 +85,19 @@ class SgAggr(object):
     dirty = attr.ib(default=True)
 
 
-class PortConfigSpecBuilder(spec_builder.SpecBuilder):
-    def __init__(self, spec_factory):
-        super(PortConfigSpecBuilder, self).__init__(spec_factory)
-        self.rule_obj = self.factory.create('ns0:DvsTrafficRule')
-
-    def traffic_rule(self):
-        return copy.copy(self.rule_obj)
-
-    def create_spec(self, spec_type):
-        return self.factory.create(spec_type)
-
-
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):
-    action = 'ns0:DvsAcceptNetworkRuleAction'
+    action = vim.dvs.TrafficRule.AcceptAction
     direction = 'both'
     reverse_class = None
     _backward_port_range = (None, None)
     _port_range = (None, None)
 
-    def __init__(self, spec_builder, ethertype, protocol, name=None):
-        self.spec_builder = spec_builder
+    def __init__(self, ethertype, protocol, name=None):
+        self.rule = vim.DvsTrafficRule()
+        self.rule.action = self.action()
 
-        self.rule = spec_builder.traffic_rule()
-        self.rule.action = self.spec_builder.create_spec(self.action)
-
-        self.ip_qualifier = self.spec_builder.create_spec(
-            'ns0:DvsIpNetworkRuleQualifier')
+        self.ip_qualifier = vim.DvsIpNetworkRuleQualifier()
 
         self.ethertype = ethertype
         if ethertype:
@@ -122,7 +108,7 @@ class TrafficRuleBuilder(object):
             protocol_number = dvs_const.PROTOCOL.get(protocol, None)
             if not protocol_number:
                 raise ValueError("Unknown protocol %s", protocol)
-            int_exp = self.spec_builder.create_spec('ns0:IntExpression')
+            int_exp = vim.IntExpression()
             int_exp.value = protocol_number
             self.ip_qualifier.protocol = int_exp
 
@@ -131,7 +117,7 @@ class TrafficRuleBuilder(object):
     def reverse(self, cidr_bool):
         """Returns reversed rule"""
         name = 'reversed ' + (self.name or '')
-        rule = self.reverse_class(self.spec_builder, self.ethertype,
+        rule = self.reverse_class(self.ethertype,
                                   self.protocol, name=name.strip())
         if cidr_bool:
             rule.cidr = self.cidr
@@ -169,10 +155,10 @@ class TrafficRuleBuilder(object):
             return None
 
         if begin == end:
-            result = self.spec_builder.create_spec('ns0:DvsSingleIpPort')
+            result = vim.DvsSingleIpPort()
             result.portNumber = begin
         else:
-            result = self.spec_builder.create_spec('ns0:DvsIpPortRange')
+            result = vim.DvsIpPortRange()
             result.startPortNumber = begin
             result.endPortNumber = end
         return result
@@ -183,15 +169,15 @@ class TrafficRuleBuilder(object):
 
         if cidr.prefixlen <= 0:
             cidr = _ANY_IPS[self.ethertype]
-            result = self.spec_builder.create_spec('ns0:IpRange')
+            result = vim.IpRange()
             result.addressPrefix = str(cidr.network_address)
-            result.prefixLength = '0'  # Not just zero, because it evaluates to false and will be dropped
+            result.prefixLength = 0
         elif cidr.prefixlen < cidr.max_prefixlen:
-            result = self.spec_builder.create_spec('ns0:IpRange')
+            result = vim.IpRange()
             result.addressPrefix = str(cidr.network_address)
             result.prefixLength = cidr.prefixlen
         else:
-            result = self.spec_builder.create_spec('ns0:SingleIp')
+            result = vim.SingleIp()
             result.address = str(cidr.network_address)
 
         return result
@@ -211,9 +197,9 @@ class TrafficRuleBuilder(object):
 class IngressRule(TrafficRuleBuilder):
     direction = 'incomingPackets'
 
-    def __init__(self, spec_builder, ethertype, protocol, name=None):
+    def __init__(self, ethertype, protocol, name=None):
         super(IngressRule, self).__init__(
-            spec_builder, ethertype, protocol, name)
+            ethertype, protocol, name)
         self.reverse_class = EgressRule
 
     @TrafficRuleBuilder.port_range.setter
@@ -241,9 +227,9 @@ class IngressRule(TrafficRuleBuilder):
 class EgressRule(TrafficRuleBuilder):
     direction = 'outgoingPackets'
 
-    def __init__(self, spec_builder, ethertype, protocol, name=None):
+    def __init__(self, ethertype, protocol, name=None):
         super(EgressRule, self).__init__(
-            spec_builder, ethertype, protocol, name)
+            ethertype, protocol, name)
         self.reverse_class = IngressRule
 
     @TrafficRuleBuilder.port_range.setter
@@ -269,10 +255,10 @@ class EgressRule(TrafficRuleBuilder):
 
 
 class DropAllRule(TrafficRuleBuilder):
-    action = 'ns0:DvsDropNetworkRuleAction'
+    action = vim.DvsDropNetworkRuleAction
 
 
-def build_port_rules(builder, ports, hashed_rules=None):
+def build_port_rules(ports, hashed_rules=None):
     port_config_list = []
     hashed_rules = hashed_rules or {}
     for port in ports:
@@ -288,23 +274,22 @@ def build_port_rules(builder, ports, hashed_rules=None):
 
         if key:
             port_config = port_configuration(
-                builder, key, port['security_group_rules'], hashed_rules,
+                key, port['security_group_rules'], hashed_rules,
                 version=version,
                 filter_config_key=filter_config_key)
             port_config_list.append(port_config)
     return port_config_list
 
 
-def get_port_rules(client_factory, ports):
+def get_port_rules(ports):
     if not ports:
         return
 
-    builder = PortConfigSpecBuilder(client_factory)
     hashed_rules = {}
-    return build_port_rules(builder, ports, hashed_rules)
+    return build_port_rules(ports, hashed_rules)
 
 
-def filter_policy(builder, sg_rules=None, hashed_rules=None, filter_config_key=None):
+def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
     rules = []
@@ -321,7 +306,7 @@ def filter_policy(builder, sg_rules=None, hashed_rules=None, filter_config_key=N
                 str(reverse_seq), built_rule.description)
             built_reverse_rule.sequence = reverse_seq
         else:
-            rule = _create_rule(builder, rule_info, name='regular')
+            rule = _create_rule(rule_info, name='regular')
             built_rule = rule.build(seq)
             cidr_revert = not _rule_excepted(rule)
             reverse_rule = rule.reverse(cidr_revert)
@@ -334,16 +319,16 @@ def filter_policy(builder, sg_rules=None, hashed_rules=None, filter_config_key=N
 
     seq = len(rules) * 10
     for protocol in dvs_const.PROTOCOL.keys():
-        rules.append(DropAllRule(builder, None, protocol,
+        rules.append(DropAllRule(None, protocol,
                                  name='drop all').build(seq))
         seq += 10
 
     return builder.filter_policy(rules, filter_config_key=filter_config_key)
 
 
-def port_configuration(builder, port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
+def port_configuration(port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
     setting = builder.port_setting()
-    setting.filterPolicy = filter_policy(builder, sg_rules=sg_rules, hashed_rules=hashed_rules,
+    setting.filterPolicy = filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
                                          filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
@@ -362,7 +347,7 @@ def _rule_excepted(rule):
     return False
 
 
-def _create_rule(builder, rule_info, ip=None, name=None):
+def _create_rule(rule_info, ip=None, name=None):
     if rule_info.direction == 'ingress':
         rule_class = IngressRule
         cidr = rule_info.source_ip_prefix
@@ -374,7 +359,6 @@ def _create_rule(builder, rule_info, ip=None, name=None):
 
     try:
         rule = rule_class(
-            spec_builder=builder,
             ethertype=rule_info.ethertype,
             protocol=rule_info.protocol,
             name=name

@@ -31,8 +31,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import timeutils
-from oslo_utils import uuidutils
-from osprofiler.profiler import trace_cls, init as profiler_init, _clean as profiler_clean
+from osprofiler.profiler import trace_cls
 
 import neutron.context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
@@ -46,7 +45,7 @@ from networking_dvs.api import dvs_agent_rpc_api
 from networking_dvs.common import constants as dvs_const, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 from networking_dvs.common.util import stats
-from networking_dvs.utils import dvs_util, security_group_utils as sg_util
+from networking_dvs.utils import dvs_util, security_group_utils as sg_util, spec_builder as builder
 
 LOG = logging.getLogger(__name__)
 
@@ -178,10 +177,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
 
         sg_set_rules = []
-        client_factory = dvs.connection.vim.client.factory
-        builder = sg_util.PortConfigSpecBuilder(client_factory)
-        port_config = sg_util.port_configuration(
-            builder, None, sg_set_rules, {}, None, None).setting
+
+        port_config = sg_util.port_configuration(None, sg_set_rules, {}, None, None).setting
         port_config.vlan = builder.vlan(dvs_segment["segmentation_id"])
 
         pg = dvs.create_dvportgroup(sg_set, port_config, update=False)
@@ -371,7 +368,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
         ports_to_bind = list(self.api.uuid_port_map[port_id] for port_id in six.iterkeys(updated_ports))
-
         ports_to_skip = collections.defaultdict(list)
 
         for port in found_ports:
@@ -404,6 +400,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
             self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
+        if ports_to_skip:
+            LOG.debug("Ports to skip: {}".format([port["port_id"] for port in ports_to_skip]))
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -454,23 +452,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                                    self.agent_id, self.conf.host)
 
     def rpc_loop(self):
-        eventlet.sleep(0)
-
         while self._check_and_handle_signal():
-            trace_step = self.conf.profiler.enabled \
-                         and self.conf.DVS.trace_every_nth_iteration > 0 \
-                         and self.iter_num % self.conf.DVS.trace_every_nth_iteration == 0
-
-            if trace_step:
-                base_id = uuidutils.generate_uuid()
-                LOG.info("Starting trace %s", base_id)
-                profiler_init(self.conf.profiler.hmac_keys[0], base_id=base_id)
+            trace_step = False
 
             with timeutils.StopWatch() as w:
                 self.process_ports()
-
-            if trace_step:
-                profiler_clean()
 
             self.loop_count_and_wait(w.elapsed())
 
@@ -525,12 +511,8 @@ def neutron_dvs_cli():
     sg_aggr = sg_aggr_obj[dvs.uuid][sg_set]
     sg_util.apply_rules(patched_sg_rules, sg_aggr)
 
-    client_factory = dvs.connection.vim.client.factory
-    builder = sg_util.PortConfigSpecBuilder(client_factory)
-
     sg_set_rules = sg_util.get_rules(sg_aggr)
-    port_config = sg_util.port_configuration(
-        builder, None, sg_set_rules, {}, None, None).setting
+    port_config = sg_util.port_configuration(None, sg_set_rules, {}, None, None).setting
 
     neutron_vlan_id = neutron_ports[0]['segmentation_id']
     dvpg_name = dvs_util.dvportgroup_name(dvs.uuid, sg_set)
