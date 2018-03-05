@@ -130,7 +130,7 @@ def _config_differs(current, update):
 
     return False
 
-@trace_cls("vmwareapi")
+@trace_cls("vmwareapi", hide_args=True)
 class DVSController(object):
     """Controls one DVS."""
 

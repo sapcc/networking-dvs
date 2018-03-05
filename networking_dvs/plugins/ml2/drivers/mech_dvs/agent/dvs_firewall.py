@@ -25,7 +25,7 @@ LOG = logging.getLogger(__name__)
 CONF = config.CONF
 
 
-@trace_cls("driver")
+@trace_cls("driver", hide_args=True, hide_result=True)
 class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def __init__(self, integration_bridge=None):
         if isinstance(integration_bridge, VCenter):

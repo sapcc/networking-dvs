@@ -399,7 +399,7 @@ class VCenterMonitor(object):
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
 
 
-@trace_cls("vmwareapi")
+@trace_cls("vmwareapi", hide_args=True)
 class VCenter(object):
     # PropertyCollector discovers changes on vms and their hardware and produces
     #    (mac, switch, portKey, portGroupKey, connectable.connected, connectable.status)
