@@ -100,6 +100,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         self.pool = eventlet.greenpool.GreenPool(size=10)  # Start small, so we identify possible bottlenecks
         self.conf = conf or CONF
+        self.context = neutron.context.get_admin_context()
+
         network_maps = neutron_utils.parse_mappings(self.conf.ML2_VMWARE.network_maps)
         network_maps_v2 = {}
 
@@ -235,7 +237,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.state_rpc = agent_rpc.PluginReportStateAPI(topics.PLUGIN)
 
         # RPC network init
-        self.context = neutron.context.get_admin_context_without_session()
 
         # Handle updates from service
         endpoints = [self]

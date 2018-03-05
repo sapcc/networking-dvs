@@ -20,10 +20,11 @@ from collections import defaultdict
 
 import attr
 import six
-from ipaddress import ip_network, collapse_addresses
+from ipaddress import ip_network, collapse_addresses, IPv4Network, IPv6Network
 from neutron.i18n import _LI
 from oslo_log import log
 from pyVmomi import vim, vmodl
+from eventlet import sleep
 
 from networking_dvs.common import constants as dvs_const
 from networking_dvs.utils import spec_builder as builder
@@ -47,17 +48,24 @@ _ANY_IPS = {
 }
 
 
+def _to_ip_network(x):
+    if isinstance(x, (IPv4Network, IPv6Network)):
+        return x
+    else:
+        return ip_network(six.text_type(x), strict=False)
+
+
 @attr.s(cmp=True, hash=True)
 class Rule(object):
     direction = attr.ib(default=None)
     ethertype = attr.ib(default=None)
     protocol = attr.ib(default=None)
 
-    dest_ip_prefix = attr.ib(default=None, convert=_optional(lambda x: ip_network(x, strict=False)))
+    dest_ip_prefix = attr.ib(default=None, convert=_optional(_to_ip_network))
     port_range_min = attr.ib(default=0, convert=int)
     port_range_max = attr.ib(default=0, convert=int)
 
-    source_ip_prefix = attr.ib(default=None, convert=_optional(lambda x: ip_network(x, strict=False)))
+    source_ip_prefix = attr.ib(default=None, convert=_optional(_to_ip_network))
     source_port_range_min = attr.ib(default=0, convert=int)
     source_port_range_max = attr.ib(default=0, convert=int)
 
@@ -300,13 +308,13 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
             rule, reverse_rule = hashed_rules[rule_info]
             built_rule = copy.copy(rule)
             built_reverse_rule = copy.copy(reverse_rule)
-            built_rule.description = '%d. regular' % seq
+            built_rule.description = '%d.' % seq
             built_rule.sequence = seq
-            built_reverse_rule.description = '%s. reversed %s' % (
+            built_reverse_rule.description = '%s. rev %s' % (
                 str(reverse_seq), built_rule.description)
             built_reverse_rule.sequence = reverse_seq
         else:
-            rule = _create_rule(rule_info, name='regular')
+            rule = _create_rule(rule_info, name='')
             built_rule = rule.build(seq)
             cidr_revert = not _rule_excepted(rule)
             reverse_rule = rule.reverse(cidr_revert)
@@ -406,6 +414,7 @@ def _patch_sg_rules(security_group_rules):
                     new_rule.port_range_min = 0
                     new_rule.port_range_max = 65535
                 patched_rules.append(new_rule)
+        sleep(0)
 
     return patched_rules
 

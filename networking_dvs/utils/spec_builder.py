@@ -137,7 +137,7 @@ def neutron_to_port_config_spec(port):
                             key=port_desc.port_key,
                             setting=setting,
                             name=port["port_id"],
-                            description="Neutron port for network {}".format(port["network_id"]))
+                            description=port["network_id"])
 
 
 def wait_options(max_wait_seconds=None, max_object_updates=None):

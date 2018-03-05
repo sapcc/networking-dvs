@@ -37,7 +37,7 @@ from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_utils import timeutils
 from pyVmomi import vim, vmodl
-
+from oslo_db.sqlalchemy import enginefacade
 from osprofiler.profiler import trace_cls
 
 from networking_dvs.common import config as dvs_config, util as c_util, constants
@@ -322,6 +322,7 @@ class VCenterMonitor(object):
                         port_desc.port_key = str(change_val)
                         self._handle_port_update(port_desc, now)
                     elif "backing.port.portgroupKey" == attribute:
+                        port_desc.port_group_key = str(change_val)
                         # An update on the portgroup keys means
                         # that the virtual machine got reassigned
                         # to a different distributed virtual portgroup,
@@ -365,7 +366,7 @@ class VCenterMonitor(object):
             connected=connectable.connected if connectable else None,
             status=connectable.status if connectable else None,
             vmobref=vmobref,
-            device_key=value.key
+            device_key=value.key,
         ))
         port_desc.device_type = value.__class__.__name__
         return port_desc
@@ -411,7 +412,7 @@ class VCenter(object):
         self.agent = agent
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
-        self.context = None
+        self.context = agent.context
         self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
         self.queue = Queue(None)
 
@@ -435,7 +436,7 @@ class VCenter(object):
                 'port': {
                     'binding:vif_details': {
                         'dvs_port_key': port_desc.port_key,
-                        'dvs_uuid': port_desc.dvs_uuid
+                        'dvs_uuid': port_desc.dvs_uuid,
                     }, 'mac_address': port_desc.mac_address}
             }
 
@@ -588,6 +589,7 @@ class VCenter(object):
                     ports_by_mac.pop(port_desc.mac_address)
         LOG.debug("Read all ports")
 
+    @enginefacade.reader
     def get_ports_by_mac(self, mac_addresses):
         if not mac_addresses:
             return []
