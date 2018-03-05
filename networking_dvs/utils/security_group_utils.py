@@ -303,6 +303,7 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
     rules = []
     seq = 0
     reverse_seq = len(sg_rules) * 10
+    sleep_counter = 500
     for rule_info in sg_rules:
         if rule_info in hashed_rules:
             rule, reverse_rule = hashed_rules[rule_info]
@@ -310,8 +311,8 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
             built_reverse_rule = copy.copy(reverse_rule)
             built_rule.description = '%d.' % seq
             built_rule.sequence = seq
-            built_reverse_rule.description = '%s. rev %s' % (
-                str(reverse_seq), built_rule.description)
+            built_reverse_rule.description = '%d. rev %d' % (
+                reverse_seq, seq)
             built_reverse_rule.sequence = reverse_seq
         else:
             rule = _create_rule(rule_info, name='')
@@ -324,6 +325,10 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
         rules.extend([built_rule, built_reverse_rule])
         seq += 10
         reverse_seq += 10
+        sleep_counter -= 1
+        if sleep_counter <= 0:
+            sleep_counter = 500
+            sleep(0)
 
     seq = len(rules) * 10
     for protocol in dvs_const.PROTOCOL.keys():
