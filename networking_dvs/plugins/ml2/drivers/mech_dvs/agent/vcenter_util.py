@@ -368,7 +368,7 @@ class VCenterMonitor(object):
             vmobref=vmobref,
             device_key=value.key,
         ))
-        port_desc.device_type = value.__class__.__name__
+        _, port_desc.device_type = value.__class__.__name__.rsplit('.', 1)
         return port_desc
 
     def _handle_port_update(self, port_desc, now):

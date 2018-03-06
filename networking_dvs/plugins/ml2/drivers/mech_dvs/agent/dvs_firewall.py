@@ -127,20 +127,19 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 segmentation_id = port['segmentation_id']
                 # Schedule for reassignment
                 if not decrement:
-                    sg_aggr.pg.vlans.update([segmentation_id])
-                    if port['port_desc'].port_group_key != sg_aggr.pg.key:
+                    sg_aggr.vlans.update([segmentation_id])
+                    if sg_aggr.pg and port['port_desc'].port_group_key != sg_aggr.pg.key:
                         sg_aggr.ports_to_assign.append(port)
                 else:
-                    sg_aggr.pg.vlans.subtract({segmentation_id: 1})
+                    sg_aggr.vlans.subtract({segmentation_id: 1})
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     @staticmethod
-    def _select_default_vlan(pg):
-        LOG.debug("%s: %s", pg.name, pg.vlans)
-        return builder.vlan(pg.vlans.most_common(1)[0][0])
+    def _select_default_vlan(sg):
+        return builder.vlan(sg.vlans.most_common(1)[0][0])
 
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
         if not sg_aggr.dirty:
@@ -156,7 +155,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         port_config = builder.port_setting()
         port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
-        port_config.vlan = self._select_default_vlan(sg_aggr.pg)
+        port_config.vlan = self._select_default_vlan(sg_aggr)
 
         sg_tags = ['security_group:' + sg_set, 'host:' + CONF.host]
         stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
@@ -221,7 +220,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             port_backing.port = port_connection
 
             # Specify the device that we are going to edit
-            virtual_device = getattr(vim, port_desc.device_type)()
+            virtual_device = getattr(vim.vm.device, port_desc.device_type)()
             virtual_device.key = port_desc.device_key
             virtual_device.backing = port_backing
             virtual_device.addressType = "manual"
@@ -238,7 +237,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
             # Queue the update
             vm_ref = vim.VirtualMachine(port_desc.vmobref)
-            vm_ref._stub = self.dvs.connection._stub
+            vm_ref._stub = self.v_center.connection._stub
             if not CONF.AGENT.dry_run:
                 self._green.spawn_n(reconfig_vm, vm_ref, vm_config_spec)
             else:

@@ -16,7 +16,7 @@
 import abc
 import bisect
 import copy
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import attr
 import six
@@ -81,6 +81,7 @@ class SgAggr(object):
     rules = attr.ib(default=attr.Factory(dict))
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
+    vlans = attr.ib(default=attr.Factory(Counter), hash=False, cmp=False)
 
 
 @six.add_metaclass(abc.ABCMeta)

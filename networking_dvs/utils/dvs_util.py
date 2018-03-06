@@ -27,7 +27,6 @@ from oslo_utils import timeutils
 from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
-from collections import Counter
 from requests.exceptions import ConnectionError
 
 from networking_dvs.common import config, util
@@ -138,7 +137,6 @@ class PortGroup(object):
     name = attr.ib(convert=str)
     description = attr.ib(convert=str)
     config_version = attr.ib(default=None, convert=optional_attr(str), hash=False, cmp=False) # Actually an int, but represented as a string
-    vlans = attr.ib(default=attr.Factory(Counter), hash=False, cmp=False)
     default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
     async_fetch = attr.ib(default=None, hash=False, repr=False, cmp=False)
 
@@ -207,11 +205,11 @@ class DVSController(object):
                 blocked)
             pg_create_task = self._dvs.CreateDVPortgroup_Task(spec=pg_spec)
 
-            result = wait_for_task(pg_create_task, si=self.connection)
+            wait_for_task(pg_create_task, si=self.connection)
         except vim.fault.VimFault as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
         else:
-            pg = result.result
+            pg = pg_create_task.info.result
             self._port_groups_by_name[name] = pg
             LOG.info(_LI('Network %(name)s created \n%(pg_ref)s'),
                      {'name': name, 'pg_ref': pg})
@@ -298,7 +296,8 @@ class DVSController(object):
         LOG.debug("Update Ports: {}".format(sorted([spec.name for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         try:
-            return wait_for_task(update_task, si=self.connection)  # -> May raise DvsOperationBulkFault, when host is down
+            wait_for_task(update_task, si=self.connection)  # -> May raise DvsOperationBulkFault, when host is down
+            return update_task.info.result
         except vim.fault.NotFound:
             return
 
@@ -546,14 +545,13 @@ class DVSController(object):
             now = timeutils.utcnow()
             pg_create_task = self._dvs.CreateDVPortgroup_Task(spec=pg_spec)
 
-            result = wait_for_task(pg_create_task, si=self.connection)
-
-            pg_ref = result.result
+            wait_for_task(pg_create_task, si=self.connection)
+            pg_ref = pg_create_task.info.result
 
             props = util.get_object_properties_dict(self.connection, pg_ref, ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
-            LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
+            LOG.debug("Creating portgroup {} took {} seconds.".format(dvpg_name, delta.seconds))
 
             pg = PortGroup(
                 key=props["key"],
