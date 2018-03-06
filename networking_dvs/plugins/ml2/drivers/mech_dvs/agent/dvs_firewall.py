@@ -216,7 +216,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # Configure the backing to the required dvportgroup
             port_connection = vim.DistributedVirtualSwitchPortConnection()
             port_connection.switchUuid = dvs_uuid
-            port_connection.portgroupKey = sg_aggr.pg_key
+            port_connection.portgroupKey = sg_aggr.pg.key
             port_backing = vim.VirtualEthernetCardDistributedVirtualPortBackingInfo()
             port_backing.port = port_connection
 
