@@ -358,8 +358,8 @@ class DVSController(object):
                 value = self.update_ports(update_specs)
 
                 for spec in update_specs:
-                    port = self.ports_by_key[spec.key]
-                    port_desc = port.get('port_desc', None)
+                    port = self.ports_by_key.get(spec.key)
+                    port_desc = port and port.get('port_desc')
                     if port_desc and port_desc.config_version:
                         port_desc.config_version = str(int(port_desc.config_version) + 1)
 
