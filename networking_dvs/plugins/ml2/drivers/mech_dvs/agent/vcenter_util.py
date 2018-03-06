@@ -21,6 +21,7 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 
 from eventlet.queue import Full, Empty, LightQueue as Queue
 from eventlet.event import Event
+from eventlet import sleep
 
 import attr
 import six
@@ -40,6 +41,7 @@ from pyVmomi import vim, vmodl
 from oslo_db.sqlalchemy import enginefacade
 from osprofiler.profiler import trace_cls
 
+from httplib import BadStatusLine
 from networking_dvs.common import config as dvs_config, util as c_util, constants
 from networking_dvs.utils import dvs_util
 from networking_dvs.utils import spec_builder as builder
@@ -77,12 +79,7 @@ def get_cluster_ref_by_name(connection, cluster_name):
             return cluster.obj
 
 
-_attr_args = {'cmp': True, 'hash': True}
-if attr.__version__ > '16':
-    _attr_args.update(slots=True)
-
-
-@attr.s(**_attr_args)
+@attr.s(**constants.ATTR_ARGS)
 class _DVSPortDesc(object):
     dvs_uuid = attr.ib(convert=str, cmp=True)
     port_key = attr.ib(convert=str, cmp=True)
@@ -140,7 +137,7 @@ class _DVSPortDesc(object):
         return values
 
 
-@attr.s(**_attr_args)
+@attr.s(**constants.ATTR_ARGS)
 class _DVSPortMonitorDesc(_DVSPortDesc):
     vmobref = attr.ib(convert=str, default=None)
     device_key = attr.ib(convert=int, default=None)
@@ -186,7 +183,6 @@ class VCenterMonitor(object):
 
         try:
             self.connection = self.connection or _create_session(self.config)
-            connection = self.connection
 
             version = None
             wait_options = builder.wait_options(60, 20)
@@ -195,27 +191,31 @@ class VCenterMonitor(object):
             self._create_property_filter(self.property_collector)
 
             while not self._quit_event.ready():
-                result = self.property_collector.WaitForUpdatesEx(version=version, options=wait_options)
-                self.iteration += 1
-                if result:
-                    version = result.version
-                    if result.filterSet and result.filterSet[0].objectSet:
-                        now = utcnow()
-                        for update in result.filterSet[0].objectSet:
-                            if isinstance(update.obj, vim.VirtualMachine):
-                                self._handle_virtual_machine(update, now)
+                try:
+                    result = self.property_collector.WaitForUpdatesEx(version=version, options=wait_options)
+                    self.iteration += 1
+                    if result:
+                        version = result.version
+                        if result.filterSet and result.filterSet[0].objectSet:
+                            now = utcnow()
+                            for update in result.filterSet[0].objectSet:
+                                if isinstance(update.obj, vim.VirtualMachine):
+                                    self._handle_virtual_machine(update, now)
 
-                changed = self.changed
-                self.changed = set()
-                if changed:
-                    self.vcenter_api.vcenter_port_changes(changed)
+                    changed = self.changed
+                    self.changed = set()
+                    if changed:
+                        self.vcenter_api.vcenter_port_changes(changed)
 
-                now = utcnow()
-                for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
-                    if port_desc.status != 'untried' or 0 == self.iteration - iteration:
-                        LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
-                                                                    (now - when).total_seconds(), port_desc.status))
-                eventlet.sleep(0)
+                    now = utcnow()
+                    for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
+                        if port_desc.status != 'untried' or 0 == self.iteration - iteration:
+                            LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
+                                                                        (now - when).total_seconds(), port_desc.status))
+                    sleep(0)
+                except BadStatusLine:
+                    sleep(1)
+                    pass
         except vmodl.fault.RequestCanceled as e:
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
@@ -479,8 +479,8 @@ class VCenter(object):
             LOG.warning(_LW("Could not find the following macs: {}").format(macs))
 
         LOG.debug("Got port information from db for %d ports", len(port_list))
-        for dvs_port_desc in port_list:
-            self.queue.put(dvs_port_desc)
+        for port in port_list:
+            self.queue.put(port)
 
     def start(self):
         self._monitor_process.start()

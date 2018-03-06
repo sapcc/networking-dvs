@@ -189,7 +189,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             LOG.warning("Failed to create port-group")
             return None
 
-        return {"bridge_name": pg["name"]}
+        return {"bridge_name": pg.name}
 
     def mtu_update(self, network_mtu, dvs_mtu, dvs, network_current):
         if network_mtu is not None and dvs_mtu is not None:
@@ -314,7 +314,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.iter_num += 1
 
     def _bound_ports(self, dvs, succeeded_keys, failed_keys):
-        LOG.info(_LI("_bound_ports({}, {})").format(succeeded_keys, failed_keys))
         port_up_ids = []
         port_down_ids = []
 
@@ -344,6 +343,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
+
+        LOG.info(_LI("_bound_ports({}, {}) ({} failures)").format(port_up_ids, port_down_ids, len(failed_keys)))
 
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)

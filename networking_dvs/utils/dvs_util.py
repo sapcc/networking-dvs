@@ -14,29 +14,30 @@
 #    under the License.
 
 import atexit
+import attr
 import hashlib
+import itertools
+import time
 import uuid
 
-import itertools
 import six
-import time
-from neutron.common import utils as neutron_utils
-from neutron.i18n import _LI, _LW, _LE
+from eventlet import sleep
 from oslo_log import log
 from oslo_utils import timeutils
+from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
+from pyVim.task import WaitForTask as wait_for_task
+from pyVmomi import vim, vmodl
+from collections import Counter
 from requests.exceptions import ConnectionError
-from eventlet import sleep
 
 from networking_dvs.common import config, util
 from networking_dvs.common import constants as dvs_const
 from networking_dvs.common import exceptions
-from networking_dvs.common.util import stats
+from networking_dvs.common.util import stats, optional_attr
 from networking_dvs.utils import spec_builder as builder
+from neutron.common import utils as neutron_utils
+from neutron.i18n import _LI, _LW, _LE
 from osprofiler.profiler import trace_cls
-from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
-from pyVim.task import WaitForTask as wait_for_task
-from pyVmomi import vim, vmodl
-
 
 LOG = log.getLogger(__name__)
 
@@ -130,6 +131,18 @@ def _config_differs(current, update):
 
     return False
 
+@attr.s(**dvs_const.ATTR_ARGS)
+class PortGroup(object):
+    ref = attr.ib()
+    key = attr.ib(convert=str)
+    name = attr.ib(convert=str)
+    description = attr.ib(convert=str)
+    config_version = attr.ib(default=None, convert=optional_attr(str), hash=False, cmp=False) # Actually an int, but represented as a string
+    vlans = attr.ib(default=attr.Factory(Counter), hash=False, cmp=False)
+    default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
+    async_fetch = attr.ib(default=None, hash=False, repr=False, cmp=False)
+
+
 @trace_cls("vmwareapi", hide_args=True)
 class DVSController(object):
     """Controls one DVS."""
@@ -158,7 +171,7 @@ class DVSController(object):
         self._config_version = dvs_config.configVersion
 
         self._port_groups_by_name = {}
-        self._get_portgroups(refresh=True)
+        # self._get_portgroups(refresh=True)
 
     @property
     def uuid(self):
@@ -262,11 +275,14 @@ class DVSController(object):
                 LOG.info(_LI('Network %(name)s deleted.') % {'name': name})
                 self._port_groups_by_name.pop(name, None)
                 return True
-            except vim.fault.VimFault as e:
-                if ignore_in_use and 'ResourceInUse' in e.fault_list:
-                    LOG.warn(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
+            except vim.fault.ResourceInUse as e:
+                if ignore_in_use:
+                    LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
                              % {'name': name, 'message': e.message})
                     return False
+                else:
+                    raise exceptions.wrap_wmvare_vim_exception(e)
+            except vim.fault.VimFault as e:
                 if dvs_const.DELETED_TEXT in e.message:
                     return True
                 else:
@@ -279,8 +295,7 @@ class DVSController(object):
     def update_ports(self, update_specs):
         if not update_specs:
             return
-        LOG.debug("Update Ports: {} {}".format(update_specs[0].setting.filterPolicy.inherited,
-                                               sorted([spec.key for spec in update_specs])))
+        LOG.debug("Update Ports: {}".format(sorted([spec.name for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         try:
             return wait_for_task(update_task, si=self.connection)  # -> May raise DvsOperationBulkFault, when host is down
@@ -355,6 +370,9 @@ class DVSController(object):
                         callback(self, succeeded_keys, failed_keys)
 
                 return value
+            except (vim.fault.DvsOperationBulkFault, vim.fault.NoHost) as e:
+                # We log it as error, but do not fail, so that the agent doesn't have to restart
+                LOG.error("Failed to apply changes due to: %s", e.msg)
             except vim.fault.VimFault as e:
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.msg:
                     for port_info in self.get_port_info_by_portkey([spec.key for spec in update_specs]):
@@ -430,12 +448,7 @@ class DVSController(object):
         portgroups = self._get_portgroups(max_objects)
 
         for dvpg in six.itervalues(portgroups):
-            description = dvpg["description"]
-            if description == security_group_set:
-                async_fetch = dvpg.get("asyncFetch", None)
-                if async_fetch:
-                    LOG.warning("Blocking on port-group %s", security_group_set)
-                    async_fetch.wait()
+            if dvpg.description == security_group_set:
                 return dvpg
 
     def _get_portgroups(self, max_objects=100, refresh=False):
@@ -467,32 +480,28 @@ class DVSController(object):
 
         pc_result = property_collector.RetrievePropertiesEx(specSet=[property_filter_spec], options=options)
 
-        def _fetch(props):
+        def _fetch(pg):
             sleep(0) # Yield to another task
-            result = util.get_object_properties_dict(self.connection, props["ref"],
+            result = util.get_object_properties_dict(self.connection, pg.ref,
                                                 ["config.configVersion", "config.defaultPortConfig"])
-            config_version = result.pop("config.configVersion", None)
-            if config_version:
-                props["configVersion"] = int(config_version)
-            default_port_config = result.pop("config.defaultPortConfig", None)
-            if default_port_config:
-                props["defaultPortConfig"] = default_port_config
-            props.pop("asyncFetch", None)
+            pg.config_version = result.pop("config.configVersion", None)
+            pg.default_port_config = result.pop("config.defaultPortConfig", None)
+            pg.async_fetch = None
 
         with util.WithRetrieval(vim, pc_result) as pc_objects:
             for objContent in pc_objects:
                 props = {prop.name: prop.val for prop in objContent.propSet}
-                props["ref"] = objContent.obj
-                props["description"] = str(props.pop("config.description", ""))
-                config_version = props.pop("config.configVersion", None)
-                if config_version:
-                    props["configVersion"] = int(config_version)
-                default_port_config = props.pop("config.defaultPortConfig", None)
-                if default_port_config:
-                    props["defaultPortConfig"] = default_port_config
-                if not props.get("configVersion") or not props.get("defaultPortConfig"):
-                    props["asyncFetch"] = self.pool.spawn(_fetch, props)
-                self._port_groups_by_name[props["name"]] = props
+                pg = PortGroup(ref=objContent.obj,
+                               key=props["key"],
+                               name=props["name"],
+                               description=props.pop("config.description", ""),
+                               config_version=props.pop("config.configVersion", None),
+                               default_port_config=props.pop("config.defaultPortConfig", None),
+                               )
+
+                if not pg.config_version or not pg.default_port_config:
+                    pg.async_fetch = self.pool.spawn(_fetch, pg)
+                self._port_groups_by_name[pg.name] = pg
 
         return self._port_groups_by_name
 
@@ -546,15 +555,16 @@ class DVSController(object):
             stats.timing('networking_dvs.dvportgroup.created', delta)
             LOG.debug("Creating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
 
-            values = {"key": props["key"],
-                      "ref": pg_ref,
-                      "name": dvpg_name,
-                      "configVersion": 0,
-                      "description": sg_set,
-                      "defaultPortConfig": port_config
-                      }
-            self._port_groups_by_name[dvpg_name] = values
-            return values
+            pg = PortGroup(
+                key=props["key"],
+                ref=pg_ref,
+                name=dvpg_name,
+                config_version=0,
+                description=sg_set,
+                default_port_config=port_config
+            )
+            self._port_groups_by_name[dvpg_name] = pg
+            return pg
         except vim.fault.DuplicateName as dn:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
 
@@ -577,25 +587,28 @@ class DVSController(object):
     @stats.timed()
     def update_dvportgroup(self, pg, port_config=None, name=None, retries=3):
         for ntry in six.moves.xrange(retries):
-            pg_ref = pg["ref"]
-            name = name or pg.get("name")
+            pg_ref = pg.ref
 
-            if not name:
+            if not pg.name:
                 LOG.debug("Missing name for %s", pg_ref.value)
 
-            default_port_config = pg.get("defaultPortConfig")
+            if pg.async_fetch:
+                LOG.warning("Blocking on port-group %s", pg.name)
+                pg.async_fetch.wait()
 
-            if name == pg.get("name") \
+            default_port_config = pg.default_port_config
+
+            if (name == pg.name or not name) \
                     and (default_port_config or not port_config) \
                     and not _config_differs(default_port_config, port_config):
-                LOG.debug("Skipping update: No changes to known config on %s", (name))
+                LOG.debug("Skipping update: No changes to known config on %s", pg.name)
                 return
 
             try:
                 pg_spec = builder.pg_config(port_config)
-                pg_spec.configVersion = str(pg["configVersion"])
+                pg_spec.configVersion = str(pg.config_version)
 
-                if name and name != pg["name"]:
+                if name and name != pg.name:
                     pg_spec.name = name
 
                 now = timeutils.utcnow()
@@ -604,8 +617,8 @@ class DVSController(object):
                 else:
                     LOG.debug(pg_spec)
 
-                pg["configVersion"] += 1
-                pg["defaultPortConfig"] = port_config
+                pg.config_version = str(int(pg.config_version) + 1)
+                pg.default_port_config = port_config
 
                 if not CONF.AGENT.dry_run:
                     wait_for_task(pg_update_task, si=self.connection)
@@ -615,6 +628,8 @@ class DVSController(object):
 
                 LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
                 return
+            except vim.fault.DvsOperationBulkFault as e:
+                self.rectify_for_fault(e)
             except vim.fault.VimFault as e:
                 if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e) \
                         and ntry != retries - 1:
@@ -622,18 +637,13 @@ class DVSController(object):
                     ## TODO A proper read-out of the current config
                     props = util.get_object_properties_dict(self.connection, pg_ref,
                                                                 ["config.configVersion", "config.defaultPortConfig"])
-                    pg["configVersion"] = int(props["config.configVersion"])
-                    pg["defaultPortConfig"] = props["config.defaultPortConfig"]
+                    pg.config_version = props["config.configVersion"]
+                    pg.default_port_config = props["config.defaultPortConfig"]
 
                     continue
-
-                if dvs_const.BULK_FAULT_TEXT in str(e):
-                    info = get_task_info(self.connection, pg_update_task)
-                    self.rectifyForFault(info.error.fault)
-                    return
                 raise exceptions.wrap_wmvare_vim_exception(e)
 
-    def rectifyForFault(self, fault):
+    def rectify_for_fault(self, fault):
         """
         Handles DvsOperationBulkFault by attempting to rectify the hosts' configuration with the switch
         """
@@ -642,7 +652,7 @@ class DVSController(object):
         for hf in host_faults:
             if not hf:
                 continue
-            host_ref = hf.host.value
+            host_ref = hf.host
             if host_ref in self.hosts_to_rectify:
                 if time.time() - self.rectify_wait > self.hosts_to_rectify[host_ref]:
                     self.hosts_to_rectify[host_ref] = time.time()
@@ -656,7 +666,7 @@ class DVSController(object):
         if not hosts:
             return
         LOG.debug("Hosts to rectify: {}".format(hosts))
-        rectify_task = self.connection.dvSwitchManager.RectifyDvsOnHost_Task(hosts=list(hosts))
+        rectify_task = self.connection.content.dvSwitchManager.RectifyDvsOnHost_Task(hosts=list(hosts))
 
     def switch_port_blocked_state(self, port):
         try:
@@ -1000,11 +1010,3 @@ def get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key):
 def get_dvs_by_id_and_key(dvs_list, port_id, port_key):
     dvs, port = get_dvs_and_port_by_id_and_key(dvs_list, port_id, port_key)
     return dvs
-
-
-def get_task_info(connection, task_ref):
-    """
-    Helper that returns a task' info field
-    """
-    task_info = connection.invoke_api(util, 'get_object_property', connection, task_ref, 'info')
-    return task_info

@@ -111,6 +111,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         """
         Process security group settings for port updates
         """
+        LOG.debug("Got %s %s", decrement, [port['device'] for port in ports])
         for dvs_uuid, port_list in six.iteritems(_ports_by_switch(ports)):
             for port in port_list:
                 sg_set = sg_util.security_group_set(port)
@@ -119,25 +120,31 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     continue
 
                 sg_aggr = self._sg_aggregates_per_dvs_uuid[dvs_uuid][sg_set]
-                if not sg_aggr.pg_key:
+                if not sg_aggr.pg:
                     dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-                    pg = dvs.get_port_group_for_security_group_set(sg_set)
-                    if pg:
-                        sg_aggr.pg_key = pg["key"]
-                        sg_aggr.vlan = pg["defaultPortConfig"].vlan.vlanId
+                    sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
 
+                segmentation_id = port['segmentation_id']
                 # Schedule for reassignment
                 if not decrement:
-                    if port['port_desc'].port_group_key != sg_aggr.pg_key:
+                    sg_aggr.pg.vlans.update([segmentation_id])
+                    if port['port_desc'].port_group_key != sg_aggr.pg.key:
                         sg_aggr.ports_to_assign.append(port)
+                else:
+                    sg_aggr.pg.vlans.subtract({segmentation_id: 1})
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
+    @staticmethod
+    def _select_default_vlan(pg):
+        LOG.debug("%s: %s", pg.name, pg.vlans)
+        return builder.vlan(pg.vlans.most_common(1)[0][0])
+
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
         if not sg_aggr.dirty:
-            if sg_aggr.pg_key:
+            if sg_aggr.pg:
                 self._reassign_ports(sg_aggr)
             return
 
@@ -149,19 +156,19 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         port_config = builder.port_setting()
         port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
-        if sg_aggr.vlan:
-            port_config.vlan = builder.vlan(sg_aggr.vlan)
+        port_config.vlan = self._select_default_vlan(sg_aggr.pg)
 
         sg_tags = ['security_group:' + sg_set, 'host:' + CONF.host]
         stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
-        pg = dvs.get_port_group_for_security_group_set(sg_set)
-        if pg:
-            sg_aggr.pg_key = pg["key"]
+        if not sg_aggr.pg:
+            sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
+
+        if sg_aggr.pg:
             if len(sg_set_rules) == 0:
                 LOG.debug("No rules left")
             else:
-                dvs.update_dvportgroup(pg, port_config)
+                dvs.update_dvportgroup(sg_aggr.pg, port_config)
             self._reassign_ports(sg_aggr)
         else:
             self._create_dvpg_and_update_sg_aggr(dvs,
@@ -177,7 +184,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 for sg_set, sg_aggregate in six.iteritems(sg_aggregates):
                     yield dvs, sg_set, sg_aggregate
 
-        for result in self._green.starmap(self._apply_changed_sg_aggr, _items()):
+        for _ in self._green.starmap(self._apply_changed_sg_aggr, _items()):
             pass
 
     def _reassign_ports(self, sg_aggr):
@@ -191,12 +198,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         ports = sg_aggr.ports_to_assign
         sg_aggr.ports_to_assign = []
 
-        if not sg_aggr.vlan and ports:
-            vlan_ids = Counter([port['segmentation_id']
-                                for port in ports
-                                if 'vlan' == port.get('network_type', None) and port.get('segmentation_id', None)])
-            sg_aggr.vlan, _ = vlan_ids.most_common(1)[0]
-
         port_keys_to_drop = defaultdict(list)
         for port in ports:
             sg_set = sg_util.security_group_set(port)
@@ -204,7 +205,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 LOG.debug("Port {} has no security group set, skipping reassignment.".format(port['id']))
                 continue
             port_desc = port['port_desc']
-            if port_desc.port_group_key == sg_aggr.pg_key:
+            if port_desc.port_group_key == sg_aggr.pg.key:
                 # Existing ports can enter the reassignment queue
                 # on agent boot before the pg_key has been set
                 # on the sg_aggr object. Filter them here.
@@ -259,7 +260,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     def _create_dvpg_and_update_sg_aggr(self, dvs, sg_set, port_config, sg_aggr):
         pg = dvs.create_dvportgroup(sg_set, port_config)
-        sg_aggr.pg_key = pg["key"]
+        sg_aggr.pg = pg
         self._reassign_ports(sg_aggr)
 
 

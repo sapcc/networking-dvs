@@ -28,23 +28,14 @@ from eventlet import sleep
 
 from networking_dvs.common import constants as dvs_const
 from networking_dvs.utils import spec_builder as builder
+from networking_dvs.common.util import optional_attr
 
 LOG = log.getLogger(__name__)
 
-try:
-    from attr.converters import optional as _optional
-except ImportError:
-    def _optional(converter):
-        def wrap(value):
-            if value is None:
-                return None
-            return converter(value)
-
-        return wrap
 
 _ANY_IPS = {
-    'IPv4': ip_network(u'0.0.0.0/0'),
-    'IPv6': ip_network(u'::/0')
+    'IPv4': ip_network(six.u('0.0.0.0/0')),
+    'IPv6': ip_network(six.u('::/0'))
 }
 
 
@@ -55,17 +46,17 @@ def _to_ip_network(x):
         return ip_network(six.text_type(x), strict=False)
 
 
-@attr.s(cmp=True, hash=True)
+@attr.s(**dvs_const.ATTR_ARGS)
 class Rule(object):
     direction = attr.ib(default=None)
     ethertype = attr.ib(default=None)
     protocol = attr.ib(default=None)
 
-    dest_ip_prefix = attr.ib(default=None, convert=_optional(_to_ip_network))
+    dest_ip_prefix = attr.ib(default=None, convert=optional_attr(_to_ip_network))
     port_range_min = attr.ib(default=0, convert=int)
     port_range_max = attr.ib(default=0, convert=int)
 
-    source_ip_prefix = attr.ib(default=None, convert=_optional(_to_ip_network))
+    source_ip_prefix = attr.ib(default=None, convert=optional_attr(_to_ip_network))
     source_port_range_min = attr.ib(default=0, convert=int)
     source_port_range_max = attr.ib(default=0, convert=int)
 
@@ -84,10 +75,9 @@ class Rule(object):
             self.dest_ip_prefix = value
 
 
-@attr.s(cmp=True, hash=True)
+@attr.s(**dvs_const.ATTR_ARGS)
 class SgAggr(object):
-    pg_key = attr.ib(default=None)
-    vlan = attr.ib(default=None)
+    pg = attr.ib(default=None)
     rules = attr.ib(default=attr.Factory(dict))
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
@@ -478,7 +468,6 @@ def _consolidate_rules(rules):
 
     for rule_set, rules in six.iteritems(grouped):
         collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules if rule.ip_prefix]))
-
         for rule in rules:
             try:
                 ip_prefix = rule.ip_prefix

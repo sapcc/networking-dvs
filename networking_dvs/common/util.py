@@ -382,7 +382,7 @@ def get_object_properties_dict(si, moref, properties_to_collect):
             LOG.warning("Unable to retrieve value for %(path)s "
                         "Reason: %(reason)s",
                         {'path': m.path,
-                         'reason': m.fault.localizedMessage})
+                         'reason': m.faultCause.localizedMessage})
     return property_dict
 
 class WithRetrieval(object):
@@ -402,3 +402,14 @@ class WithRetrieval(object):
             for obj in self.retrieve_result.objects:
                 yield obj
             self.retrieve_result = continue_retrieval(self.si, self.retrieve_result)
+
+try:
+    from attr.converters import optional as optional_attr
+except ImportError:
+    def optional_attr(converter):
+        def wrap(value):
+            if value is None:
+                return None
+            return converter(value)
+
+        return wrap

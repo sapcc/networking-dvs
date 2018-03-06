@@ -75,4 +75,4 @@ class NoDVSForPhysicalNetwork(VMWareDVSException):
 def wrap_wmvare_vim_exception(original_exception):
     return VMWareDVSException(type=type(original_exception),
                               message=original_exception.msg,
-                              cause=original_exception.cause)
+                              cause=original_exception.faultCause)

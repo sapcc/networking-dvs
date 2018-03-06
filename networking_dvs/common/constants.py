@@ -12,6 +12,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import attr
+
 VMWARE_HYPERVISOR_TYPE = 'VMware vCenter Server'
 DVS = 'dvs'
 AGENT_TYPE_DVS = 'DVS Agent'
@@ -44,3 +46,7 @@ BULK_FAULT_TEXT = "Cannot complete a vSphere Distributed Switch operation for on
 
 MIN_EPHEMERAL_PORT = 32768
 MAX_EPHEMERAL_PORT = 65535
+
+ATTR_ARGS = {'cmp': True, 'hash': True}
+if attr.__version__ > '16':
+    ATTR_ARGS.update(slots=True)
