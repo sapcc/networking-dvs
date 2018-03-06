@@ -252,7 +252,7 @@ class DVSController(object):
 
     def delete_networks_without_active_ports(self, pg_keys_with_active_ports):
         for pg_ref in self._get_all_port_groups():
-            if pg_ref.value not in pg_keys_with_active_ports:
+            if pg_ref not in pg_keys_with_active_ports:
                 # check name
                 try:
                     name = util.get_object_property(self.connection, pg_ref, 'name')
@@ -588,7 +588,7 @@ class DVSController(object):
             pg_ref = pg.ref
 
             if not pg.name:
-                LOG.debug("Missing name for %s", pg_ref.value)
+                LOG.debug("Missing name for %s", pg_ref._moId)
 
             if pg.async_fetch:
                 LOG.warning("Blocking on port-group %s", pg.name)
@@ -624,7 +624,7 @@ class DVSController(object):
                 delta = timeutils.utcnow() - now
                 stats.timing('networking_dvs.dvportgroup.updated', delta)
 
-                LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref.value, delta.seconds))
+                LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref._moId, delta.seconds))
                 return
             except vim.fault.DvsOperationBulkFault as e:
                 self.rectify_for_fault(e)
