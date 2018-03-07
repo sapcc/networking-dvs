@@ -82,7 +82,7 @@ class SgAggr(object):
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
     vlans = attr.ib(default=attr.Factory(Counter), hash=False, cmp=False)
-
+    project_id = attr.ib(default=None, hash=False, cmp=False)
 
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):

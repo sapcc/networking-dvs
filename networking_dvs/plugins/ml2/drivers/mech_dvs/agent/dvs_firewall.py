@@ -123,6 +123,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 if not sg_aggr.pg:
                     dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
                     sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
+                    LOG.debug(port)
+                    sg_aggr.project_id = port['tenant_id']
 
                 segmentation_id = port['segmentation_id']
                 # Schedule for reassignment
@@ -147,6 +149,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 self._reassign_ports(sg_aggr)
             return
 
+        if not sg_aggr.pg:
+            sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
+
         # Mark as processed, might be reset below
         sg_aggr.dirty = False
 
@@ -157,11 +162,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
         port_config.vlan = self._select_default_vlan(sg_aggr)
 
-        sg_tags = ['security_group:' + sg_set, 'host:' + CONF.host]
-        stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
+        sg_tags = ['port_group:' + sg_aggr.pg.name,
+                   'security_group:' + sg_set.replace(',', '-'),
+                   'host:' + CONF.host]
 
-        if not sg_aggr.pg:
-            sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
+        if sg_aggr.project_id:
+            sg_tags.append('project_id:' + sg_aggr.project_id),
+
+        stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
         if sg_aggr.pg:
             if len(sg_set_rules) == 0:
