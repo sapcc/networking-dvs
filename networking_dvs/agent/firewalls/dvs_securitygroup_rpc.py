@@ -15,21 +15,25 @@
 from oslo_log import log as logging
 
 from neutron.agent import securitygroups_rpc
-from neutron import manager
 import neutron.context
-from neutron.api.rpc.handlers.securitygroups_rpc import SecurityGroupServerRpcCallback
+from copy import copy
+from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin
 from neutron.i18n import _LI
 from oslo_db.sqlalchemy import enginefacade
+from oslo_db.sqlalchemy.utils import get_table
+from sqlalchemy.sql import select
 
 LOG = logging.getLogger(__name__)
 
 
-class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
+class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc, SecurityGroupServerRpcMixin):
     def __init__(self, *args, **kwargs):
         super(DVSSecurityGroupRpc, self).__init__(*args, **kwargs)
         self.context = neutron.context.get_admin_context()
-        self.plugin = manager.NeutronManager.get_plugin()
-        self.callback = SecurityGroupServerRpcCallback()
+        if self.firewall:
+            self.v_center = self.firewall.v_center
+        else:
+            self.v_center = None
 
     def prepare_devices_filter(self, device_ids):
         if not device_ids:
@@ -61,9 +65,32 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc):
         # return self.get_security_group_rules_for_devices_rpc(device_ids, chunk_size=1)
 
     @enginefacade.reader
+    def get_ports_from_devices(self, devices):
+        ports = {}
+
+        session = self.context.session
+
+        with session.begin(subtransactions=True):
+            sgpb = get_table(session.get_bind(), 'securitygroupportbindings')
+            for port_id, security_group_id in session.execute(
+                    select([sgpb.c.port_id, sgpb.c.security_group_id],
+                           sgpb.c.port_id.in_(devices))):
+                port = ports.get(port_id)
+                if not port:
+                    port = copy(self.v_center.get_port_by_uuid(port_id))
+                    port['security_group_source_groups'] = []
+                    port['security_group_rules'] = []
+                    port['security_groups'] = [security_group_id]
+                    ports[port_id] = port
+                else:
+                    port['security_groups'].append(security_group_id)
+        return ports
+
+    @enginefacade.reader
     def get_security_group_rules_for_devices_db(self, device_ids):
         LOG.debug("Querying database for %s", device_ids)
-        return self.callback.security_group_rules_for_devices(self.context, devices=device_ids).values()
+        ports = self.get_ports_from_devices(device_ids)
+        return self.security_group_rules_for_ports(self.context, ports).values()
 
     def get_security_group_rules_for_devices_rpc(self, device_ids, chunk_size=50):
         devices = []

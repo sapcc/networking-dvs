@@ -403,7 +403,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
             self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
         if ports_to_skip:
-            LOG.debug("Ports to skip: {}".format([port["port_id"] for port in ports_to_skip]))
+            port_ids = []
+            for ports in six.itervalues(ports_to_skip):
+                for port in ports:
+                    port_ids.append(port["port_id"])
+
+            LOG.debug("Ports to skip: {}".format(port_ids))
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)

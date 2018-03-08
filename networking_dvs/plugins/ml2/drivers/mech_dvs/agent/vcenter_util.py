@@ -27,6 +27,7 @@ import attr
 import six
 
 from collections import defaultdict
+from itertools import groupby
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.db import models_v2
@@ -82,8 +83,8 @@ def get_cluster_ref_by_name(connection, cluster_name):
 @attr.s(**constants.ATTR_ARGS)
 class _DVSPortDesc(object):
     dvs_uuid = attr.ib(convert=str, cmp=True)
-    port_key = attr.ib(convert=str, cmp=True)
-    port_group_key = attr.ib(convert=str)  # It is an int, but the WDSL defines it as a string
+    port_key = attr.ib(convert=str, cmp=True) # It is an int, but the WDSL defines it as a string
+    port_group_key = attr.ib(convert=str)
     mac_address = attr.ib(convert=str)
     connection_cookie = attr.ib(convert=str)  # Same as with port_key, int which is represented as a string
     connected = attr.ib(default=False)
@@ -428,6 +429,11 @@ class VCenter(object):
             self.uuid_dvs_map[dvs.uuid] = dvs
 
     def vcenter_port_changes(self, changed):
+        # Now we should split up the operations by port_group_key
+        for _, changed in groupby(changed, lambda x: x.port_group_key):
+            eventlet.spawn_n(self._vcenter_port_changes, changed)
+
+    def _vcenter_port_changes(self, changed):
         ports_by_mac = defaultdict(dict)
 
         for port_desc in changed:
@@ -451,11 +457,11 @@ class VCenter(object):
                 dvs.ports_by_key.pop(port_desc.port_key, None)
                 ports_by_mac.pop(port_desc.mac_address, None)
 
-        # self.read_dvs_ports(ports_by_mac) Skip that
+        self.read_dvs_ports(ports_by_mac)
         macs = set(six.iterkeys(ports_by_mac))
 
         port_list = []
-        for port_id, mac, status, admin_state_up, network_id, network_type, segmentation_id in self.get_ports_by_mac(macs):
+        for port_id, tenant_id, mac, status, admin_state_up, network_id, network_type, segmentation_id in self.get_ports_by_mac(macs):
             macs.discard(mac)
             port_info = ports_by_mac[mac]
             neutron_info = {
@@ -463,6 +469,7 @@ class VCenter(object):
                 "id": port_id,
                 "device": port_id,
                 "mac_address": mac,
+                "tenant_id": tenant_id,
                 "admin_state_up": admin_state_up,
                 "status": status,
                 "network_id": network_id,
@@ -599,7 +606,11 @@ class VCenter(object):
 
         session = self.context.session
         with session.begin(subtransactions=True):
-            return session.query(models_v2.Port.id, models_v2.Port.mac_address, models_v2.Port.status, models_v2.Port.admin_state_up,
+            return session.query(models_v2.Port.id,
+                                 models_v2.Port.tenant_id,
+                                 models_v2.Port.mac_address,
+                                 models_v2.Port.status,
+                                 models_v2.Port.admin_state_up,
                                  models_ml2.NetworkSegment.network_id,
                                  models_ml2.NetworkSegment.network_type,
                                  models_ml2.NetworkSegment.segmentation_id).\

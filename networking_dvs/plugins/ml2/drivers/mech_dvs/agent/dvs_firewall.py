@@ -123,7 +123,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                 if not sg_aggr.pg:
                     dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
                     sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
-                    LOG.debug(port)
                     sg_aggr.project_id = port['tenant_id']
 
                 segmentation_id = port['segmentation_id']
