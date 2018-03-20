@@ -81,7 +81,6 @@ class SgAggr(object):
     rules = attr.ib(default=attr.Factory(dict))
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
-    vlans = attr.ib(default=attr.Factory(Counter), hash=False, cmp=False)
     project_id = attr.ib(default=None, hash=False, cmp=False)
 
 @six.add_metaclass(abc.ABCMeta)
@@ -422,8 +421,13 @@ def security_group_set(port):
     A security group set is a comma-separated,
     sorted list of security group ids
     """
+    security_groups = port.get('security_groups')
+    if not security_groups:
+        LOG.warning("No security groups for port %s", port['id'])
+        return None
+
     # There are 36 chars to a uuid, and in the description fits 255 chars
-    security_groups = sorted(port['security_groups'])
+    security_groups = sorted(security_groups)
     num_groups = len(security_groups)
     if num_groups < 7:  # Up to 6 fit in full length
         return ",".join(security_groups)

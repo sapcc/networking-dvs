@@ -199,13 +199,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 dvs.update_mtu(network_mtu)
 
     def port_update(self, context, **kwargs):
-        LOG.info("port_update message {}".format(kwargs))
+        # LOG.info("port_update message {}".format(kwargs))
         port = kwargs.get('port')
         port_id = port['id']
         # Avoid updating a port, which has not been created yet
         if port_id in self.known_ports and not port_id in self.deleted_ports:
             self.updated_ports[port_id] = port
-        LOG.debug("port_update message processed for {}".format(kwargs))
+        # LOG.debug("port_update message processed for {}".format(kwargs))
 
     def port_delete(self, context, **kwargs):
         port_id = kwargs.get('port_id')
@@ -370,7 +370,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         # Get new ports on the VMWare integration bridge
         found_ports = self._scan_ports()
         ports_to_bind = list(self.api.uuid_port_map[port_id] for port_id in six.iterkeys(updated_ports))
-        ports_to_skip = collections.defaultdict(list)
 
         for port in found_ports:
             port_segmentation_id = port.get('segmentation_id')
@@ -381,12 +380,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 # or vms not managed by openstack
                 LOG.warning(_LW("Missing attribute in port {}").format(port))
             elif port_network_type == 'vlan' and port_segmentation_id:
-                if port_segmentation_id != port_vlan_id:
+                if port_segmentation_id != port_vlan_id or \
+                        port['admin_state_up'] != (port.get('status') == 'ACTIVE'):
+                    # Either mismatch in VLAN or status
                     ports_to_bind.append(port)
-                elif port['admin_state_up'] and not port.get('status') == 'ACTIVE':
-                    # Skip ports that are already bound to the same vlan.
-                    # This happens on agent restart with existing instances.
-                    ports_to_skip[port['port_desc'].dvs_uuid].append(port)
             elif port_network_type == 'flat':
                 ports_to_bind.append(port)
             else:
@@ -402,13 +399,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if ports_to_bind:
             LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
             self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
-        if ports_to_skip:
-            port_ids = []
-            for ports in six.itervalues(ports_to_skip):
-                for port in ports:
-                    port_ids.append(port["port_id"])
-
-            LOG.debug("Ports to skip: {}".format(port_ids))
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
@@ -442,12 +432,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         for dvs in six.itervalues(self.api.uuid_dvs_map):
             dvs.apply_queued_update_specs()
 
-        for dvs_uuid, ports in six.iteritems(ports_to_skip):
-            LOG.debug("Reporting skipped ports as bound to neutron: {}".format(
-                [port["port_id"] for port in ports]))
-            self._bound_ports(self.api.uuid_dvs_map[dvs_uuid],
-                              [port['port_desc'].port_key for port in ports],
-                              [])
         LOG.debug("Left")
 
     def _update_device_list(self, port_down_ids, port_up_ids):

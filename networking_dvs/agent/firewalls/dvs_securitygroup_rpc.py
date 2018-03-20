@@ -68,6 +68,9 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc, SecurityGrou
     def get_ports_from_devices(self, devices):
         ports = {}
 
+        if not devices:
+            return ports
+
         session = self.context.session
 
         with session.begin(subtransactions=True):

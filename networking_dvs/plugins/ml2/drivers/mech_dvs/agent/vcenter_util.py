@@ -39,13 +39,14 @@ from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_utils import timeutils
 from pyVmomi import vim, vmodl
+from sqlalchemy.sql import select
 from oslo_db.sqlalchemy import enginefacade
+from oslo_db.sqlalchemy.utils import get_table
 from osprofiler.profiler import trace_cls
 
 from httplib import BadStatusLine
 from networking_dvs.common import config as dvs_config, util as c_util, constants
-from networking_dvs.utils import dvs_util
-from networking_dvs.utils import spec_builder as builder
+from networking_dvs.utils import dvs_util, spec_builder as builder, security_group_utils as sg_util
 
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
@@ -65,7 +66,7 @@ def _cast(value, _type=str):
 
 def get_all_cluster_mors(connection):
     """Get all the clusters in the vCenter."""
-    query = c_util.get_objects(connection, vim.ClusterComputeResource, 100, ["name"])
+    query = c_util.get_objects(connection, vim.ClusterComputeResource, 100, ['name'])
     with c_util.WithRetrieval(connection, query) as compute_resources:
         for mor in compute_resources:
             yield mor
@@ -110,7 +111,7 @@ class _DVSPortDesc(object):
             # portKey in connection, key in port
             port_key=_cast(getattr(port, 'portKey', None) or getattr(port, 'key', None)),
             port_group_key=_cast(port.portgroupKey),
-            connection_cookie=_cast(getattr(port, "connectionCookie", None)),
+            connection_cookie=_cast(getattr(port, 'connectionCookie', None)),
         )
         # The next ones are not part of DistributedVirtualSwitchPortConnection as returned by the backing.port,
         # but a DistributedVirtualPort as returned by FetchDVPorts
@@ -119,20 +120,24 @@ class _DVSPortDesc(object):
             values['config_version'] = _cast(port_config.configVersion)
 
             setting = getattr(port_config, 'setting', None)
-            if setting:
-                values['vlan_id'] = _cast(getattr(getattr(setting, 'vlan', None), 'vlanId', None), int)
 
-            filter_policy = getattr(setting, "filterPolicy", None)
-            if filter_policy:
-                filter_config = getattr(filter_policy, "filterConfig", None)
-                if filter_config:
-                    values['filter_config_key'] = str(filter_config[0].key)
+            try:
+                if not setting.vlan.inherited:
+                    values['vlan_id'] = setting.vlan.vlanId
+            except AttributeError:
+                pass
+
+            try:
+                if not setting.filterPolicy.inherited:
+                    values['filter_config_key'] = setting.filterPolicy.filterConfig[0].key
+            except AttributeError:
+                pass
 
         port_state = getattr(port, 'state', None)
         if port_state:
             try:
                 values['link_up'] = port_state.runtimeInfo.linkUp
-            except AttributeError as e:
+            except AttributeError:
                 pass
 
         return values
@@ -180,7 +185,7 @@ class VCenterMonitor(object):
                 pass
 
     def _run(self):
-        LOG.info(_LI("Monitor running... "))
+        LOG.info(_LI('Monitor running... '))
 
         try:
             self.connection = self.connection or _create_session(self.config)
@@ -211,7 +216,7 @@ class VCenterMonitor(object):
                     now = utcnow()
                     for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                         if port_desc.status != 'untried' or 0 == self.iteration - iteration:
-                            LOG.debug("Down: {} {} for {} {} {}".format(mac, port_desc.port_key, self.iteration - iteration,
+                            LOG.debug('Down: {} {} for {} {} {}'.format(mac, port_desc.port_key, self.iteration - iteration,
                                                                         (now - when).total_seconds(), port_desc.status))
                     sleep(0)
                 except BadStatusLine:
@@ -413,7 +418,6 @@ class VCenter(object):
         self.agent = agent
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
-        self.context = agent.context
         self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
         self.queue = Queue(None)
 
@@ -428,6 +432,24 @@ class VCenter(object):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
+        for port in self.get_agent_ports():
+            physical_network = port['physical_network']
+            dvs = self.network_dvs_map.get(physical_network)
+            if not dvs:
+                LOG.error("Could not find switch for port %s", port)
+                continue
+            sg_set = sg_util.security_group_set(port)
+            if not sg_set:
+                LOG.warning("No security group set for port %s", port['id'])
+                continue
+            pg = dvs.get_port_group_for_security_group_set(sg_set)
+            if not pg:
+                LOG.warning("Could not get portgroup %s for port %s", sg_set, port['id'])
+                continue
+            pg.ports[port['mac_address']] = port
+            self.mac_port_map[port['mac_address']] = port
+            self.uuid_port_map[port['id']] = port
+
     def vcenter_port_changes(self, changed):
         # Now we should split up the operations by port_group_key
         for _, changed in groupby(changed, lambda x: x.port_group_key):
@@ -437,56 +459,38 @@ class VCenter(object):
         ports_by_mac = defaultdict(dict)
 
         for port_desc in changed:
-            port = {
-                'port_desc': port_desc,
-                'port': {
-                    'binding:vif_details': {
-                        'dvs_port_key': port_desc.port_key,
-                        'dvs_uuid': port_desc.dvs_uuid,
-                    }, 'mac_address': port_desc.mac_address}
-            }
-
             dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
             if not dvs:
+                LOG.debug("Switch %s not managed by DVS-Agent", port_desc.dvs_uuid)
                 continue
 
             if port_desc.status != 'deleted':
-                dvs.ports_by_key[port_desc.port_key] = port
+                port = dvs.get_port_by_port_desc(port_desc)
                 ports_by_mac[port_desc.mac_address] = port
             else:
-                dvs.ports_by_key.pop(port_desc.port_key, None)
+                dvs.remove_port_by_port_desc(port_desc)
                 ports_by_mac.pop(port_desc.mac_address, None)
 
         self.read_dvs_ports(ports_by_mac)
         macs = set(six.iterkeys(ports_by_mac))
 
+        # We might skip getting objects from the db here, if they are already present
         port_list = []
-        for port_id, tenant_id, mac, status, admin_state_up, network_id, network_type, segmentation_id in self.get_ports_by_mac(macs):
-            macs.discard(mac)
-            port_info = ports_by_mac[mac]
-            neutron_info = {
-                "port_id": port_id,
-                "id": port_id,
-                "device": port_id,
-                "mac_address": mac,
-                "tenant_id": tenant_id,
-                "admin_state_up": admin_state_up,
-                "status": status,
-                "network_id": network_id,
-                "network_type": network_type,
-                "segmentation_id": segmentation_id,
-            }
-
-            port_info["port"]["id"] = port_id
+        for neutron_info in self.get_ports_by_mac(macs):
+            mac_address = neutron_info['mac_address']
+            port_id = neutron_info['port_id']
+            macs.discard(mac_address)
+            port_info = ports_by_mac[mac_address]
             c_util.dict_merge(port_info, neutron_info)
             self.uuid_port_map[port_id] = port_info
             port_list.append(port_info)
 
         if macs:
-            LOG.warning(_LW("Could not find the following macs: {}").format(macs))
+            LOG.warning(_LW("Could not find the following macs: %s"), macs)
 
         LOG.debug("Got port information from db for %d ports", len(port_list))
         for port in port_list:
+            port_desc = port['port_desc']
             self.queue.put(port)
 
     def start(self):
@@ -532,6 +536,8 @@ class VCenter(object):
                         specs.append(spec)
                     else:
                         LOG.debug(spec)
+                else:
+                    LOG.debug("Skipping port %s", port["id"])
 
             dvs.queue_update_specs(specs, callback=callback)
 
@@ -567,12 +573,11 @@ class VCenter(object):
                 block = False  # Only block on the first item
                 if port_desc.status == 'deleted':
                     ports_by_mac.pop(port_desc.mac_address, None)
+                    dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
+                    dvs.ports_by_key.pop(port_desc.port_key, None)
                     port = self.mac_port_map.pop(port_desc.mac_address, None)
                     if port:
-                        port_desc = port['port_desc']
                         self.uuid_port_map.pop(port['id'], None)
-                        dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-                        dvs.ports_by_key.pop(port_desc.port_key, None)
                 else:
                     port = self.mac_port_map.get(port_desc.mac_address, {})
                     port.update(dict(new_port))
@@ -596,30 +601,78 @@ class VCenter(object):
                     ports_by_mac.pop(port_desc.mac_address)
         LOG.debug("Read all ports")
 
-    @enginefacade.reader
-    def get_ports_by_mac(self, mac_addresses):
-        if not mac_addresses:
+    @staticmethod
+    def _query_results_to_ports(session, results):
+        ports = {}
+        for port_id, tenant_id, mac, status, admin_state_up, \
+                network_id, network_type, physical_network, segmentation_id in results:
+            ports[port_id] = {
+                "port_id": port_id,
+                "id": port_id,
+                "device": port_id,
+                "mac_address": mac,
+                "tenant_id": tenant_id,
+                "admin_state_up": admin_state_up,
+                "status": status,
+                "network_id": network_id,
+                "network_type": network_type,
+                "segmentation_id": segmentation_id,
+                "physical_network": physical_network,
+                "security_groups": []
+            }
+        if not ports:
             return []
 
-        if not self.context:
-            self.context = neutron.context.get_admin_context()
+        # This can be moved to the query with sqlalchemy 1.1
+        # http://docs.sqlalchemy.org/en/latest/core/functions.html#sqlalchemy.sql.functions.array_agg
+        sgpb = get_table(session.get_bind(), 'securitygroupportbindings')
+        for port_id, security_group_id in session.execute(
+                select([sgpb.c.port_id, sgpb.c.security_group_id], sgpb.c.port_id.in_(six.iterkeys(ports)))):
+            ports[port_id]["security_groups"].append(security_group_id)
 
-        session = self.context.session
-        with session.begin(subtransactions=True):
-            return session.query(models_v2.Port.id,
+        return ports.values()
+
+    def _build_port_query(self, session):
+        return session.query(models_v2.Port.id,
                                  models_v2.Port.tenant_id,
                                  models_v2.Port.mac_address,
                                  models_v2.Port.status,
                                  models_v2.Port.admin_state_up,
                                  models_ml2.NetworkSegment.network_id,
                                  models_ml2.NetworkSegment.network_type,
-                                 models_ml2.NetworkSegment.segmentation_id).\
+                                 models_ml2.NetworkSegment.physical_network,
+                                 models_ml2.NetworkSegment.segmentation_id,
+                             ).\
                  join(models_ml2.PortBindingLevel, models_v2.Port.id == models_ml2.PortBindingLevel.port_id).\
                  join(models_ml2.NetworkSegment, models_ml2.PortBindingLevel.segment_id == models_ml2.NetworkSegment.id).\
                  filter(models_ml2.PortBindingLevel.host == self.agent.conf.host,
                         models_ml2.PortBindingLevel.driver == constants.DVS,
-                        models_v2.Port.mac_address.in_(mac_addresses),
-                        ).all()
+                        )
+
+    @enginefacade.reader
+    def get_ports_by_mac(self, mac_addresses):
+        if not mac_addresses:
+            return []
+
+        context = neutron.context.get_admin_context()
+
+        session = context.session
+        with session.begin(subtransactions=True):
+            return self._query_results_to_ports(
+                session,
+                self._build_port_query(session).filter(models_v2.Port.mac_address.in_(mac_addresses))
+            )
+
+    @enginefacade.reader
+    def get_agent_ports(self):
+        context = neutron.context.get_admin_context()
+
+        session = context.session
+        with session.begin(subtransactions=True):
+            return self._query_results_to_ports(
+                session,
+                self._build_port_query(session)
+            )
 
     def stop(self):
         self._monitor_process.stop()

@@ -1,5 +1,6 @@
 import os, six
 import logging
+from oslo_utils.importutils import try_import
 from pyVmomi import vim, vmodl
 
 
@@ -22,7 +23,10 @@ def dict_merge(dct, merge_dct):
         else:
             dct[k] = merge_dct[k]
 
-if os.getenv('STATSD_MOCK', False):
+
+dogstatsd = try_import('datadog.dogstatsd')
+
+if not dogstatsd or os.getenv('STATSD_MOCK', False):
     from mock import Mock
     stats = Mock()
 
@@ -41,8 +45,7 @@ if os.getenv('STATSD_MOCK', False):
 
     stats.timed = timed
 else:
-    from datadog.dogstatsd import DogStatsd
-    stats = DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
+    stats = dogstatsd.DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
                       port=int(os.getenv('STATSD_PORT', 9125)),
                       namespace=os.getenv('STATSD_PREFIX', 'openstack')
                       )

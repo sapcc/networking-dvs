@@ -39,7 +39,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._green = self.v_center.pool or GreenPool()
 
     def prepare_port_filter(self, ports):
-        # LOG.debug("prepare_port_filter called with %s", ports)
+        LOG.debug("prepare_port_filter called with %s", ports)
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
         self._process_ports(merged_ports)
@@ -95,7 +95,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         merged_ports = []
         for port in ports:  # We skip on missing ports, as we will be called by the dvs_agent for new ports again
             port_id = port['id']
-            vcenter_port = copy.deepcopy(self.v_center.uuid_port_map.get(port_id, None))
+            vcenter_port = self.v_center.uuid_port_map.get(port_id, None)
             if vcenter_port:
                 dict_merge(vcenter_port, port)
                 merged_ports.append(vcenter_port)
@@ -111,7 +111,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         """
         Process security group settings for port updates
         """
-        LOG.debug("Got %s %s", decrement, [port['device'] for port in ports])
+        # LOG.debug("Got %s %s", decrement, [port['device'] for port in ports])
         for dvs_uuid, port_list in six.iteritems(_ports_by_switch(ports)):
             for port in port_list:
                 sg_set = sg_util.security_group_set(port)
@@ -125,14 +125,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
                     sg_aggr.project_id = port['tenant_id']
 
-                segmentation_id = port['segmentation_id']
                 # Schedule for reassignment
                 if not decrement:
-                    sg_aggr.vlans.update([segmentation_id])
                     if sg_aggr.pg and port['port_desc'].port_group_key != sg_aggr.pg.key:
                         sg_aggr.ports_to_assign.append(port)
-                else:
-                    sg_aggr.vlans.subtract({segmentation_id: 1})
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
@@ -140,7 +136,15 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @staticmethod
     def _select_default_vlan(sg):
-        return builder.vlan(sg.vlans.most_common(1)[0][0])
+        try:
+            pg = sg.pg
+            vlans = Counter([port.get("port_desc").vlan_id for port in six.itervalues(pg.ports)])
+            if not vlans or None in vlans:
+                return None
+            return vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec(vlanId=vlans.most_common(1)[0][0])
+        except AttributeError:
+            # Either pg is None or any of the port_desc in ports is None
+            return None
 
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
         if not sg_aggr.dirty:
@@ -159,16 +163,9 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         port_config = builder.port_setting()
         port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
-        port_config.vlan = self._select_default_vlan(sg_aggr)
-
-        sg_tags = ['port_group:' + sg_aggr.pg.name,
-                   'security_group:' + sg_set.replace(',', '-'),
-                   'host:' + CONF.host]
-
-        if sg_aggr.project_id:
-            sg_tags.append('project_id:' + sg_aggr.project_id),
-
-        stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
+        vlan = self._select_default_vlan(sg_aggr)
+        if vlan:
+            port_config.vlan = vlan
 
         if sg_aggr.pg:
             if len(sg_set_rules) == 0:
@@ -181,6 +178,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                                                  sg_set,
                                                  port_config,
                                                  sg_aggr)
+        sg_tags = ['port_group:' + sg_aggr.pg.name,
+                   'security_group:' + sg_set.replace(',', '-'),
+                   'host:' + CONF.host]
+
+        if sg_aggr.project_id:
+            sg_tags.append('project_id:' + sg_aggr.project_id),
+
+        stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', len(sg_set_rules), tags=sg_tags)
 
     @stats.timed()
     def _apply_changed_sg_aggregates(self):
@@ -203,6 +208,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
         ports = sg_aggr.ports_to_assign
         sg_aggr.ports_to_assign = []
+
+        LOG.debug("Reassigning: %s", [port['id'] for port in ports])
 
         port_keys_to_drop = defaultdict(list)
         for port in ports:
@@ -246,7 +253,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             vm_ref = vim.VirtualMachine(port_desc.vmobref)
             vm_ref._stub = self.v_center.connection._stub
             if not CONF.AGENT.dry_run:
-                self._green.spawn_n(reconfig_vm, vm_ref, vm_config_spec)
+                self._green.spawn_n(reconfigure_vm, vm_ref, vm_config_spec)
             else:
                 LOG.debug("Reassign: %s", vm_config_spec)
 
@@ -271,7 +278,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
 
 @stats.timed()
-def reconfig_vm(vm_ref, vm_config_spec):
+def reconfigure_vm(vm_ref, vm_config_spec):
     try:
         vm_ref.ReconfigVM_Task(spec=vm_config_spec)
     except vim.fault.VimFault as e:
@@ -286,7 +293,3 @@ def _ports_by_switch(ports=None):
         ports_by_switch[port['port_desc'].dvs_uuid].append(port)
 
     return ports_by_switch
-
-
-def noop(*args):
-    pass

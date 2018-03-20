@@ -130,6 +130,7 @@ def _config_differs(current, update):
 
     return False
 
+
 @attr.s(**dvs_const.ATTR_ARGS)
 class PortGroup(object):
     ref = attr.ib()
@@ -139,6 +140,7 @@ class PortGroup(object):
     config_version = attr.ib(default=None, convert=optional_attr(str), hash=False, cmp=False) # Actually an int, but represented as a string
     default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
     async_fetch = attr.ib(default=None, hash=False, repr=False, cmp=False)
+    ports = attr.ib(default=attr.Factory(dict)) # mac-address -> port
 
 
 @trace_cls("vmwareapi", hide_args=True)
@@ -169,7 +171,40 @@ class DVSController(object):
         self._config_version = dvs_config.configVersion
 
         self._port_groups_by_name = {}
+        self._port_groups_by_key = {}
         # self._get_portgroups(refresh=True)
+
+    def get_port_by_port_desc(self, port_desc):
+        if not port_desc:
+            return
+        existing_port = self.ports_by_key.get(port_desc.port_key)
+        if not existing_port or existing_port["mac_address"] != port_desc.mac_address:
+            port = {
+                'mac_address': port_desc.mac_address,
+                'port_desc': port_desc,
+                'binding:vif_details': {
+                    'dvs_port_key': port_desc.port_key,
+                    'dvs_uuid': port_desc.dvs_uuid,
+                }
+            }
+            self.ports_by_key[port_desc.port_key] = port
+
+            pg = self._port_groups_by_key.get(port_desc.port_key)
+            if pg:
+                pg.ports[port_desc.mac_address] = port
+
+            return port
+        else:
+            existing_port["port_desc"] = port_desc
+            return existing_port
+
+    def remove_port_by_port_desc(self, port_desc):
+        if not port_desc:
+            return
+        self.ports_by_key.pop(port_desc.port_key, None)
+        pg = self._port_groups_by_key.get(port_desc.port_key)
+        if pg:
+            pg.ports.pop(port_desc.mac_address, None)
 
     @property
     def uuid(self):
@@ -209,8 +244,14 @@ class DVSController(object):
         except vim.fault.VimFault as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
         else:
-            pg = pg_create_task.info.result
+            pg_ref = pg_create_task.info.result
+            pg = PortGroup(
+                ref=pg_ref,
+                key=pg_ref.key,
+                name=name,
+            )
             self._port_groups_by_name[name] = pg
+            self._port_groups_by_key[pg.key] = pg
             LOG.info(_LI('Network %(name)s created \n%(pg_ref)s'),
                      {'name': name, 'pg_ref': pg})
             return pg
@@ -220,8 +261,8 @@ class DVSController(object):
         current_name = self._get_net_name(self.dvs_name, network)
         blocked = not network['admin_state_up']
         try:
-            pg_ref = self._get_pg_by_name(original_name or current_name)
-            pg_config_info = self._get_config_by_ref(pg_ref)
+            pg = self._get_pg_by_name(original_name or current_name)
+            pg_config_info = self._get_config_by_ref(pg.ref)
 
             if (pg_config_info.defaultPortConfig.blocked.value != blocked or
                     (original_name and original_name != current_name)):
@@ -232,7 +273,7 @@ class DVSController(object):
                     pg_config_info.configVersion,
                     blocked=blocked)
                 pg_spec.name = current_name
-                pg_update_task = pg_ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
 
                 wait_for_task(pg_update_task, si=self.connection)
                 LOG.info(_LI('Network %(name)s updated'),
@@ -243,12 +284,12 @@ class DVSController(object):
     def delete_network(self, network):
         name = self._get_net_name(self.dvs_name, network)
         try:
-            pg_ref = self._get_pg_by_name(name)
+            pg = self._get_pg_by_name(name)
         except exceptions.PortGroupNotFound:
             LOG.debug('Network %s is not present in vcenter. '
                       'Nothing to delete.' % name)
             return
-        self._delete_port_group(pg_ref, name)
+        self._delete_port_group(pg)
 
     def delete_networks_without_active_ports(self, pg_keys_with_active_ports):
         for pg_ref in self._get_all_port_groups():
@@ -265,23 +306,26 @@ class DVSController(object):
                         pass
 
     @stats.timed()
-    def _delete_port_group(self, pg_ref, name, ignore_in_use=False):
+    def _delete_port_group(self, pg, ignore_in_use=False):
         while True:
             try:
-                pg_delete_task = pg_ref.Destroy_Task()
+                pg_delete_task = pg.ref.Destroy_Task()
                 wait_for_task(pg_delete_task, si=self.connection)
-                LOG.info(_LI('Network %(name)s deleted.') % {'name': name})
-                self._port_groups_by_name.pop(name, None)
+                LOG.info(_LI('Network %(name)s deleted.') % {'name': pg.name})
+                self._port_groups_by_name.pop(pg.name, None)
+                self._port_groups_by_key.pop(pg.key, None)
                 return True
             except vim.fault.ResourceInUse as e:
                 if ignore_in_use:
                     LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
-                             % {'name': name, 'message': e.message})
+                             % {'name': pg.name, 'message': e.message})
                     return False
                 else:
                     raise exceptions.wrap_wmvare_vim_exception(e)
             except vim.fault.VimFault as e:
                 if dvs_const.DELETED_TEXT in e.message:
+                    self._port_groups_by_name.pop(pg.name, None)
+                    self._port_groups_by_key.pop(pg.key, None)
                     return True
                 else:
                     raise exceptions.wrap_wmvare_vim_exception(e)
@@ -443,12 +487,9 @@ class DVSController(object):
                             setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
         return callbacks, update_specs_by_key
 
-    def get_port_group_for_security_group_set(self, security_group_set, max_objects=100):
-        portgroups = self._get_portgroups(max_objects)
-
-        for dvpg in six.itervalues(portgroups):
-            if dvpg.description == security_group_set:
-                return dvpg
+    def get_port_group_for_security_group_set(self, security_group_set):
+        dvpg_name = dvportgroup_name(self.uuid, security_group_set)
+        return self._get_portgroups().get(dvpg_name)
 
     def _get_portgroups(self, max_objects=100, refresh=False):
         if self._port_groups_by_name and not refresh:
@@ -501,6 +542,7 @@ class DVSController(object):
                 if not pg.config_version or not pg.default_port_config:
                     pg.async_fetch = self.pool.spawn(_fetch, pg)
                 self._port_groups_by_name[pg.name] = pg
+                self._port_groups_by_key[pg.key] = pg
 
         return self._port_groups_by_name
 
@@ -510,7 +552,7 @@ class DVSController(object):
         Creates an automatically-named dvportgroup on the dvswitch
         with the specified sg rules and marks it as such through the description
 
-        Returns a dictionary with "key" and "ref" keys.
+        Returns a portgroup object.
 
         Note, that while a portgroup's key and managed object id have
         the same string format and appear identical under normal use
@@ -562,6 +604,7 @@ class DVSController(object):
                 default_port_config=port_config
             )
             self._port_groups_by_name[dvpg_name] = pg
+            self._port_groups_by_key[pg.key] = pg
             return pg
         except vim.fault.DuplicateName as dn:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
@@ -585,10 +628,8 @@ class DVSController(object):
     @stats.timed()
     def update_dvportgroup(self, pg, port_config=None, name=None, retries=3):
         for ntry in six.moves.xrange(retries):
-            pg_ref = pg.ref
-
             if not pg.name:
-                LOG.debug("Missing name for %s", pg_ref._moId)
+                LOG.debug("Missing name for %s", pg.ref)
 
             if pg.async_fetch:
                 LOG.warning("Blocking on port-group %s", pg.name)
@@ -596,7 +637,7 @@ class DVSController(object):
 
             default_port_config = pg.default_port_config
 
-            if (name == pg.name or not name) \
+            if (not name or name == pg.name) \
                     and (default_port_config or not port_config) \
                     and not _config_differs(default_port_config, port_config):
                 LOG.debug("Skipping update: No changes to known config on %s", pg.name)
@@ -611,7 +652,7 @@ class DVSController(object):
 
                 now = timeutils.utcnow()
                 if not CONF.AGENT.dry_run:
-                    pg_update_task = pg_ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                    pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
                 else:
                     LOG.debug(pg_spec)
 
@@ -624,21 +665,22 @@ class DVSController(object):
                 delta = timeutils.utcnow() - now
                 stats.timing('networking_dvs.dvportgroup.updated', delta)
 
-                LOG.debug("Updating portgroup {} took {} seconds.".format(pg_ref._moId, delta.seconds))
+                LOG.debug("Updating portgroup {} took {} seconds.".format(pg.name, delta.seconds))
                 return
             except vim.fault.DvsOperationBulkFault as e:
                 self.rectify_for_fault(e)
-            except vim.fault.VimFault as e:
-                if dvs_const.CONCURRENT_MODIFICATION_TEXT in str(e) \
-                        and ntry != retries - 1:
-                    LOG.debug("Concurrent modification detected, will retry.")
-                    ## TODO A proper read-out of the current config
-                    props = util.get_object_properties_dict(self.connection, pg_ref,
-                                                                ["config.configVersion", "config.defaultPortConfig"])
-                    pg.config_version = props["config.configVersion"]
-                    pg.default_port_config = props["config.defaultPortConfig"]
+            except vim.fault.ConcurrentAccess:
+                if ntry >= retries:
+                    raise exceptions.wrap_wmvare_vim_exception(e)
+                LOG.debug("Concurrent modification detected, will retry.")
+                ## TODO A proper read-out of the current config
+                props = util.get_object_properties_dict(self.connection, pg.ref,
+                                                        ["config.configVersion", "config.defaultPortConfig"])
+                pg.config_version = props["config.configVersion"]
+                pg.default_port_config = props["config.defaultPortConfig"]
 
-                    continue
+                continue
+            except vim.fault.VimFault as e:
                 raise exceptions.wrap_wmvare_vim_exception(e)
 
     def rectify_for_fault(self, fault):
@@ -831,14 +873,14 @@ class DVSController(object):
     def _get_pg_by_name(self, pg_name, refresh_if_missing=True):
         """Get the dpg ref by name"""
         try:
-            return self._port_groups_by_name[pg_name]["ref"]
+            return self._port_groups_by_name[pg_name]
         except KeyError:
             if not refresh_if_missing:
                 raise exceptions.PortGroupNotFound(pg_name=pg_name)
 
             self._get_portgroups(refresh=True)
             try:
-                return self._port_groups_by_name[pg_name]["ref"]
+                return self._port_groups_by_name[pg_name]
             except KeyError:
                 raise exceptions.PortGroupNotFound(pg_name=pg_name)
 
@@ -876,7 +918,7 @@ class DVSController(object):
 
     def _get_ports_for_pg(self, pg_name):
         pg = self._get_pg_by_name(pg_name)
-        return util.get_object_property(self.connection, pg, 'portKeys')[0]
+        return util.get_object_property(self.connection, pg.ref, 'portKeys')[0]
 
     def _get_free_pg_keys(self, port_group):
         criteria = builder.port_criteria(
