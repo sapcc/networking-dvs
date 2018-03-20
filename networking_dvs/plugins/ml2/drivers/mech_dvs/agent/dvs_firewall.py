@@ -9,6 +9,7 @@ if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
 from eventlet.greenpool import GreenPool
 
 import six
+import eventlet
 from collections import defaultdict, Counter
 
 from neutron.agent import firewall
@@ -39,7 +40,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         self._green = self.v_center.pool or GreenPool()
 
     def prepare_port_filter(self, ports):
-        LOG.debug("prepare_port_filter called with %s", ports)
+        # LOG.debug("prepare_port_filter called with %s", ports)
         merged_ports = self._merge_port_info_from_vcenter(ports)
         self._update_ports_by_device_id(merged_ports)
         self._process_ports(merged_ports)
@@ -146,14 +147,14 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             # Either pg is None or any of the port_desc in ports is None
             return None
 
-    def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr):
+    def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr, task):
         if not sg_aggr.dirty:
             if sg_aggr.pg:
                 self._reassign_ports(sg_aggr)
             return
 
-        if not sg_aggr.pg:
-            sg_aggr.pg = dvs.get_port_group_for_security_group_set(sg_set)
+        if task:
+            task.wait()
 
         # Mark as processed, might be reset below
         sg_aggr.dirty = False
@@ -161,7 +162,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         # Prepare a port config
         sg_set_rules = sg_util.get_rules(sg_aggr)
 
-        port_config = builder.port_setting()
+        port_config = vim.VMwareDVSPortSetting()
         port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
         vlan = self._select_default_vlan(sg_aggr)
         if vlan:
@@ -171,7 +172,10 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
             if len(sg_set_rules) == 0:
                 LOG.debug("No rules left")
             else:
-                dvs.update_dvportgroup(sg_aggr.pg, port_config)
+                old_task = sg_aggr.pg.task
+                new_task = eventlet.spawn(dvs.update_dvportgroup, sg_aggr.pg, port_config, sync=old_task)
+                sg_aggr.pg.task = new_task
+                new_task.wait()
             self._reassign_ports(sg_aggr)
         else:
             self._create_dvpg_and_update_sg_aggr(dvs,
@@ -189,14 +193,11 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @stats.timed()
     def _apply_changed_sg_aggregates(self):
-        def _items():
-            for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
-                dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
-                for sg_set, sg_aggregate in six.iteritems(sg_aggregates):
-                    yield dvs, sg_set, sg_aggregate
-
-        for _ in self._green.starmap(self._apply_changed_sg_aggr, _items()):
-            pass
+        for dvs_uuid, sg_aggregates in six.iteritems(self._sg_aggregates_per_dvs_uuid):
+            dvs = self.v_center.get_dvs_by_uuid(dvs_uuid)
+            for sg_set, sg_aggregate in six.iteritems(sg_aggregates):
+                old_task = sg_aggregate.task
+                sg_aggregate.task = eventlet.spawn(self._apply_changed_sg_aggr, dvs, sg_set, sg_aggregate, old_task)
 
     def _reassign_ports(self, sg_aggr):
         """

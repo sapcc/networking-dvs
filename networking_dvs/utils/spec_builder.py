@@ -35,14 +35,8 @@ def pg_config(default_port_config):
     return spec
 
 
-def dv_switch_config():
-    spec = vim.VMwareDVSConfigSpec()
-    return spec
-
-
 def port_config_spec(key=None, version=None, setting=None, name=None, description=None):
-    spec = vim.DVPortConfigSpec()
-    spec.operation = 'edit'
+    spec = vim.DVPortConfigSpec(operation='edit')
 
     if key:
         spec.key = key
@@ -64,10 +58,6 @@ def port_config_spec(key=None, version=None, setting=None, name=None, descriptio
 
 def port_lookup_criteria():
     return vim.DistributedVirtualSwitchPortCriteria()
-
-
-def port_setting():
-    return vim.VMwareDVSPortSetting()
 
 
 def filter_policy(rules, filter_config_key=None):
@@ -125,12 +115,13 @@ def blocked(value):
 
 def neutron_to_port_config_spec(port):
     port_desc = port['port_desc']
-    setting = port_setting()
-    if port["segmentation_id"]:
-        setting.vlan = vlan(port["segmentation_id"])
+    setting = vim.VMwareDVSPortSetting()
+    segmentation_id = port.get('segmentation_id')
+    if segmentation_id:
+        setting.vlan = vlan(segmentation_id)
     else:
         setting.vlan = vlan(0)
-    setting.blocked = blocked(not port["admin_state_up"])
+    setting.blocked = blocked(not port.get('admin_state_up', True))
     setting.filterPolicy = filter_policy(None)
 
     return port_config_spec(version=port_desc.config_version,

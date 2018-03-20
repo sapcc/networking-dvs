@@ -158,7 +158,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.connection.consume_in_threads()
 
     def book_port(self, port, network_segments, network_current):
-        LOG.debug("{} {} {}".format(port["id"], port["mac_address"], network_segments))
+        # LOG.debug("{} {} {}".format(port["id"], port["mac_address"], network_segments))
 
         dvs = None
         dvs_segment = None
@@ -173,7 +173,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             return {}
 
         sg_set = sg_util.security_group_set(port)
-        dvpg_name = dvs_util.dvportgroup_name(dvs.uuid, sg_set)
 
         self.max_mtu = dvs.mtu
         self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
@@ -529,7 +528,7 @@ def neutron_dvs_cli():
             print("Neutron Port configuration rule not matched for : ", neutron_port_rules[i])
             print("DVS Port configuraiton rule: ", dvs_port_rules[i])
 
-    if match == False:
+    if match is False:
         print("Neutron port config matches DVS port config")
     else:
         if correct == 'True':

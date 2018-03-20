@@ -193,8 +193,7 @@ class VCenterMonitor(object):
             version = None
             wait_options = builder.wait_options(60, 20)
 
-            self.property_collector = self._create_property_collector()
-            self._create_property_filter(self.property_collector)
+            self.property_collector = self._create_property_filter()
 
             while not self._quit_event.ready():
                 try:
@@ -237,7 +236,9 @@ class VCenterMonitor(object):
                 LOG.error(traceback.format_exc())
                 os._exit(1)
 
-    def _create_property_filter(self, property_collector):
+    def _create_property_filter(self):
+        self.property_collector = self.property_collector or \
+                                  self.connection.content.propertyCollector.CreatePropertyCollector()
         connection = self.connection
 
         if not self.config.cluster_name:
@@ -264,12 +265,7 @@ class VCenterMonitor(object):
 
         property_filter_spec = c_util.build_property_filter_spec(property_specs, [object_spec])
 
-        return property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
-
-    def _create_property_collector(self):
-        _property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
-
-        return _property_collector
+        return self.property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
 
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
@@ -511,33 +507,27 @@ class VCenter(object):
             setattr(port_desc, k, v)
         return True
 
-    def ports_by_switch_and_key(self, ports):
-        ports_by_switch_and_key = defaultdict(dict)
-        for port in ports:
-            port_desc = port['port_desc']
-            dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-
-            if dvs:
-                ports_by_switch_and_key[dvs][port_desc.port_key] = port
-
-        return ports_by_switch_and_key
+    def port_by_switch(self, ports):
+        return groupby(ports, lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid))
 
     @c_util.stats.timed()
     def bind_ports(self, ports, callback=None):
-        ports_by_switch_and_key = self.ports_by_switch_and_key(ports)
-
-        for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
+        for dvs, ports_on_switch in self.port_by_switch(ports):
+            if not dvs:
+                LOG.warning("Received ports without known switch")
+                continue
             specs = []
-            for port in six.itervalues(ports_by_key):
-                if (port["network_type"] == "vlan" and not port["segmentation_id"] is None) \
-                        or port["network_type"] == "flat":
+            for port in ports_on_switch:
+                network_type = port.get('network_type')
+                if (network_type == 'vlan' and not port.get('segmentation_id') is None) \
+                        or network_type == 'flat':
                     spec = builder.neutron_to_port_config_spec(port)
                     if not CONF.AGENT.dry_run:
                         specs.append(spec)
                     else:
                         LOG.debug(spec)
                 else:
-                    LOG.debug("Skipping port %s", port["id"])
+                    LOG.debug("Skipping port %s", port['id'])
 
             dvs.queue_update_specs(specs, callback=callback)
 
@@ -590,11 +580,14 @@ class VCenter(object):
         return ports_by_mac
 
     def read_dvs_ports(self, ports_by_mac):
-        ports_by_switch_and_key = self.ports_by_switch_and_key(six.itervalues(ports_by_mac))
         # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
         # partly connected, meaning: the instance is associated, but the link is not quite up yet
-        for dvs, ports_by_key in six.iteritems(ports_by_switch_and_key):
-            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):  # View is not sufficient
+        for dvs, ports in self.port_by_switch(six.itervalues(ports_by_mac)):
+            if not dvs:
+                LOG.warning("Received ports without known switch")
+                continue
+            ports_by_key = dict((port['port_desc'].port_key, port) for port in ports)
+            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
                 port = ports_by_key[port_info.key]
                 if not VCenter.update_port_desc(port, port_info):
                     port_desc = port['port_desc']

@@ -82,6 +82,7 @@ class SgAggr(object):
     ports_to_assign = attr.ib(default=attr.Factory(list))
     dirty = attr.ib(default=True)
     project_id = attr.ib(default=None, hash=False, cmp=False)
+    task = attr.ib(default=None, hash=False, cmp=False)
 
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):
@@ -330,7 +331,7 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
 
 
 def port_configuration(port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
-    setting = builder.port_setting()
+    setting = vim.VMwareDVSPortSetting()
     setting.filterPolicy = filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
                                          filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
