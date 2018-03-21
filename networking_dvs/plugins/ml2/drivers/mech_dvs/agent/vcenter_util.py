@@ -173,7 +173,7 @@ class VCenterMonitor(object):
 
     def stop(self):
         try:
-            self._quit_event.send(0)
+            self._quit_event.send(True)
         except AssertionError:  # In case someone already send an event
             pass
 
@@ -416,7 +416,10 @@ class VCenter(object):
         self.agent = agent
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
-        self._monitor_process = VCenterMonitor(self, self.config, connection=self.connection, pool=self.pool)
+        self._quit_event = Event()
+        self._monitor_process = VCenterMonitor(self, self.config, quit_event=self._quit_event,
+                                               connection=self.connection, pool=self.pool,
+                                               )
         self.queue = Queue(None)
 
         self.uuid_port_map = {}
@@ -426,7 +429,8 @@ class VCenter(object):
         self.network_dvs_map = {}
 
         for network, dvs in six.iteritems(
-                dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool)):
+                dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool,
+                                                        quit_event=self._quit_event)):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
@@ -670,6 +674,12 @@ class VCenter(object):
             )
 
     def stop(self):
+        try:
+            self._quit_event.send(True)
+        except AssertionError:
+            # Someone already send an event
+            pass
+
         self._monitor_process.stop()
 
         try:

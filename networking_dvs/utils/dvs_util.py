@@ -21,9 +21,11 @@ import uuid
 
 import attr
 import six
+from collections import defaultdict
 from eventlet import sleep, spawn
 from oslo_log import log
 from oslo_utils import timeutils
+from oslo_concurrency.lockutils import lock
 from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
@@ -73,13 +75,17 @@ def wrap_retry(func):
     return wrapper
 
 
+def dvportgroup_suffix(uuid):
+    return uuid.translate(None, ' -')[:8]
+
+
 def dvportgroup_name(uuid, sg_set):
     """
     Returns a dvportgroup name for the particular security group set
     in the context of the switch of the given uuid
     """
     # There is an upper limit on managed object names in vCenter
-    dvs_id = ''.join(uuid.split(' '))[:8]
+    dvs_id = dvportgroup_suffix(uuid)
     name = sg_set + "-" + dvs_id
     if len(name) > 80:
         # so we use a hash of the security group set
@@ -154,7 +160,7 @@ class PortGroup(object):
 class DVSController(object):
     """Controls one DVS."""
 
-    def __init__(self, dvs_name, connection=None, pool=None, rectify_wait=120):
+    def __init__(self, dvs_name, connection=None, pool=None, rectify_wait=120, quit_event=None):
         super(DVSController, self).__init__()
         self.connection = connection
         self.dvs_name = dvs_name
@@ -185,10 +191,34 @@ class DVSController(object):
 
         self._property_collector = None
         self._property_collector_version = None
-        # self._get_portgroups(refresh=True)
+        if quit_event:
+            spawn(self._background_task, quit_event)
 
-    def _garbage_collection(self):
-        LOG.debug("Ping")
+    def _background_task(self, quit_event):
+        countdown = defaultdict(lambda: 10)
+        suffix = '-' + dvportgroup_suffix(self.uuid)
+        while not quit_event.ready():
+            for _ in six.moves.xrange(60):
+                if quit_event.ready():
+                    return
+                sleep(1)
+            to_delete = []
+            for pg in six.itervalues(self._port_groups_by_ref):
+                if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
+                    countdown.pop(pg.ref, None)
+                else:
+                    value = countdown[pg.ref]
+                    value -= 1
+                    if value > 0:
+                        countdown[pg.ref] = value
+                    else:
+                        to_delete.append(pg)
+            for pg in to_delete:
+                if quit_event.ready():
+                    return
+                if not self._delete_port_group(pg, ignore_in_use=True):
+                    countdown.pop(pg.ref)  # So it is in use now
+            self._sync_port_groups()
 
     def get_port_group_for_port(self, port):
         port_group_key = port['port_desc'].port_group_key
@@ -279,14 +309,14 @@ class DVSController(object):
     def _store_port_group(self, pg):
         if not pg:
             return
-        self._port_groups_by_ref[pg.ref] = pg
+        self._port_groups_by_ref[pg.ref._moId] = pg
         self._port_groups_by_key[pg.key] = pg
         self._port_groups_by_name[pg.name] = pg
 
     def _remove_port_group(self, pg):
         if not pg:
             return
-        self._port_groups_by_ref.pop(pg.ref, None)
+        self._port_groups_by_ref.pop(pg.ref._moId, None)
         self._port_groups_by_key.pop(pg.key, None)
         self._port_groups_by_name.pop(pg.name, None)
 
@@ -536,47 +566,48 @@ class DVSController(object):
             [object_spec])
 
     def _sync_port_groups(self, max_objects=100):
-        """Get all port groups on the switch"""
-        if self._property_collector is None:
-            self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
-            self._property_collector.CreateFilter(self._port_group_spec_set(), partialUpdates=False)
+        with lock(self.uuid):
+            """Get all port groups on the switch"""
+            if self._property_collector is None:
+                self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
+                self._property_collector.CreateFilter(self._port_group_spec_set(), partialUpdates=False)
 
-        options = vmodl.query.PropertyCollector.WaitOptions(maxObjectUpdates=max_objects, maxWaitSeconds=0)
-        update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
-                                                               options=options)
-
-        while update_set:
-            self._property_collector_version = update_set.version
-            if update_set.filterSet and update_set.filterSet[0].objectSet:
-                for update in update_set.filterSet[0].objectSet:
-                    if update.kind == 'leave':
-                        pg = self._port_groups_by_ref.get(update.obj)
-                        self._remove_port_group(pg)
-                    else:
-                        # update.obj
-                        props = {prop.name: prop.val for prop in update.changeSet}
-                        pg = self._port_groups_by_ref.get(update.obj)
-                        if pg:  # Update
-                            if 'name' in props:
-                                pg.name = props['name']
-                            if 'key' in props:  # Should never change, but hey...
-                                pg.name = props['key']
-                            if 'config.description':
-                                pg.description = props['description']
-
-                            self._remove_port_group(pg)
-                        else:
-                            pg = PortGroup(ref=update.obj,
-                                           key=props.get('key') or update.obj.key,
-                                           name=props['name'],
-                                           description=props.pop("config.description", ""),
-                                           config_version=props.pop("config.configVersion", None),
-                                           default_port_config=props.pop("config.defaultPortConfig", None),
-                                           )
-                        self._store_port_group(pg)
-
+            options = vmodl.query.PropertyCollector.WaitOptions(maxObjectUpdates=max_objects, maxWaitSeconds=0)
             update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
                                                                    options=options)
+
+            while update_set:
+                self._property_collector_version = update_set.version
+                if update_set.filterSet and update_set.filterSet[0].objectSet:
+                    for update in update_set.filterSet[0].objectSet:
+                        if update.kind == 'leave':
+                            pg = self._port_groups_by_ref.get(update.obj._moId)
+                            self._remove_port_group(pg)
+                        else:
+                            # update.obj
+                            props = {prop.name: prop.val for prop in update.changeSet}
+                            pg = self._port_groups_by_ref.get(update.obj)
+                            if pg:  # Update
+                                if 'name' in props:
+                                    pg.name = props['name']
+                                if 'key' in props:  # Should never change, but hey...
+                                    pg.name = props['key']
+                                if 'config.description':
+                                    pg.description = props['description']
+
+                                self._remove_port_group(pg)
+                            else:
+                                pg = PortGroup(ref=update.obj,
+                                               key=props.get('key') or update.obj.key,
+                                               name=props['name'],
+                                               description=props.pop("config.description", ""),
+                                               config_version=props.pop("config.configVersion", None),
+                                               default_port_config=props.pop("config.defaultPortConfig", None),
+                                               )
+                            self._store_port_group(pg)
+
+                update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
+                                                                       options=options)
 
     @stats.timed()
     def create_dvportgroup(self, sg_set, port_config, update=True):
@@ -634,8 +665,7 @@ class DVSController(object):
                 description=sg_set,
                 default_port_config=port_config
             )
-            self._port_groups_by_name[dvpg_name] = pg
-            self._port_groups_by_key[pg.key] = pg
+            self._store_port_group(pg)
             return pg
         except vim.fault.DuplicateName:
             LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
