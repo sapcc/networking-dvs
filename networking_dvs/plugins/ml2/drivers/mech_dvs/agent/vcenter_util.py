@@ -178,9 +178,9 @@ class VCenterMonitor(object):
             pass
 
         # This will abort the WaitForUpdateEx early, so it will cancel leave the loop timely
-        if self.connection and self.property_collector:
+        if self.connection and self._property_collector:
             try:
-                self.property_collector.CancelWaitForUpdates()
+                self._property_collector.CancelWaitForUpdates()
             except vim.fault.VimFault:
                 pass
 
@@ -193,11 +193,11 @@ class VCenterMonitor(object):
             version = None
             wait_options = builder.wait_options(60, 20)
 
-            self.property_collector = self._create_property_filter()
+            self._create_property_filter()
 
             while not self._quit_event.ready():
                 try:
-                    result = self.property_collector.WaitForUpdatesEx(version=version, options=wait_options)
+                    result = self._property_collector.WaitForUpdatesEx(version=version, options=wait_options)
                     self.iteration += 1
                     if result:
                         version = result.version
@@ -237,8 +237,10 @@ class VCenterMonitor(object):
                 os._exit(1)
 
     def _create_property_filter(self):
-        self.property_collector = self.property_collector or \
-                                  self.connection.content.propertyCollector.CreatePropertyCollector()
+        if self._property_collector:
+            return
+
+        self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
         connection = self.connection
 
         if not self.config.cluster_name:
@@ -265,7 +267,7 @@ class VCenterMonitor(object):
 
         property_filter_spec = c_util.build_property_filter_spec(property_specs, [object_spec])
 
-        return self.property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
+        return self._property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
 
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
@@ -428,7 +430,7 @@ class VCenter(object):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
-        for port in self.get_agent_ports():
+        for port in self._get_agent_ports():
             physical_network = port['physical_network']
             dvs = self.network_dvs_map.get(physical_network)
             if not dvs:
@@ -467,12 +469,12 @@ class VCenter(object):
                 dvs.remove_port_by_port_desc(port_desc)
                 ports_by_mac.pop(port_desc.mac_address, None)
 
-        self.read_dvs_ports(ports_by_mac)
+        self._read_dvs_ports(ports_by_mac)
         macs = set(six.iterkeys(ports_by_mac))
 
         # We might skip getting objects from the db here, if they are already present
         port_list = []
-        for neutron_info in self.get_ports_by_mac(macs):
+        for neutron_info in self._get_ports_by_mac(macs):
             mac_address = neutron_info['mac_address']
             port_id = neutron_info['port_id']
             macs.discard(mac_address)
@@ -537,7 +539,7 @@ class VCenter(object):
     def get_port_by_uuid(self, uuid):
         return self.uuid_port_map.get(uuid, None)
 
-    def fetch_ports_by_mac(self, portgroup_key=None, mac_addr=None):
+    def _fetch_ports_by_mac(self, portgroup_key=None, mac_addr=None):
         for dvs in six.itervalues(self.uuid_dvs_map):
             port_keys = dvs._dvs.FetchDVPortKeys(dvs._dvs, criteria=builder.port_criteria())
             ports = dvs._dvs.FetchDVPorts(criteria=builder.port_criteria(
@@ -579,7 +581,7 @@ class VCenter(object):
             pass
         return ports_by_mac
 
-    def read_dvs_ports(self, ports_by_mac):
+    def _read_dvs_ports(self, ports_by_mac):
         # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
         # partly connected, meaning: the instance is associated, but the link is not quite up yet
         for dvs, ports in self.port_by_switch(six.itervalues(ports_by_mac)):
@@ -643,7 +645,7 @@ class VCenter(object):
                         )
 
     @enginefacade.reader
-    def get_ports_by_mac(self, mac_addresses):
+    def _get_ports_by_mac(self, mac_addresses):
         if not mac_addresses:
             return []
 
@@ -657,7 +659,7 @@ class VCenter(object):
             )
 
     @enginefacade.reader
-    def get_agent_ports(self):
+    def _get_agent_ports(self):
         context = neutron.context.get_admin_context()
 
         session = context.session
@@ -705,7 +707,7 @@ def main():
 
     with timeutils.StopWatch() as w:
         ports = util.get_new_ports(True, 10.0)
-        util.read_dvs_ports(ports)
+        util._read_dvs_ports(ports)
 
     print(ports)
     print(w.elapsed())

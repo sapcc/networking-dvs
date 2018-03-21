@@ -515,7 +515,7 @@ def neutron_dvs_cli():
 
     dvs_vlan_id = port_group['defaultPortConfig'].vlan.vlanId
 
-    dvs_port = agent.api.fetch_ports_by_mac(portgroup_key, mac_addr)
+    dvs_port = agent.api._fetch_ports_by_mac(portgroup_key, mac_addr)
     neutron_port_rules = port_config.filterPolicy.filterConfig[0].trafficRuleset.rules
     dvs_port_rules = dvs_port.config.setting.filterPolicy.filterConfig[0].trafficRuleset.rules
 
