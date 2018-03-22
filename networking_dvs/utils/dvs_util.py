@@ -206,12 +206,12 @@ class DVSController(object):
             for pg in six.itervalues(self._port_groups_by_ref):
                 try:
                     if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
-                        countdown.pop(pg.ref, None)
+                        countdown.pop(pg.ref._moId, None)
                     else:
-                        value = countdown[pg.ref]
+                        value = countdown[pg.ref._moId]
                         value -= 1
                         if value > 0:
-                            countdown[pg.ref] = value
+                            countdown[pg.ref._moId] = value
                         else:
                             to_delete.append(pg)
                 except vim.fault.ManagedObjectNotFound:
@@ -220,7 +220,7 @@ class DVSController(object):
                 if quit_event.ready():
                     return
                 if not self._delete_port_group(pg, ignore_in_use=True):
-                    countdown.pop(pg.ref)  # So it is in use now
+                    countdown.pop(pg.ref._moId)  # So it is in use now
             self._sync_port_groups()
 
     def get_port_group_for_port(self, port):
