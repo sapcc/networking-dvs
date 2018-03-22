@@ -204,15 +204,18 @@ class DVSController(object):
                 sleep(1)
             to_delete = []
             for pg in six.itervalues(self._port_groups_by_ref):
-                if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
-                    countdown.pop(pg.ref, None)
-                else:
-                    value = countdown[pg.ref]
-                    value -= 1
-                    if value > 0:
-                        countdown[pg.ref] = value
+                try:
+                    if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
+                        countdown.pop(pg.ref, None)
                     else:
-                        to_delete.append(pg)
+                        value = countdown[pg.ref]
+                        value -= 1
+                        if value > 0:
+                            countdown[pg.ref] = value
+                        else:
+                            to_delete.append(pg)
+                except vim.fault.ManagedObjectNotFound:
+                    to_delete.append(pg)
             for pg in to_delete:
                 if quit_event.ready():
                     return
@@ -357,27 +360,24 @@ class DVSController(object):
 
     @stats.timed()
     def _delete_port_group(self, pg, ignore_in_use=False):
-        while True:
-            try:
-                pg_delete_task = pg.ref.Destroy_Task()
-                wait_for_task(pg_delete_task, si=self.connection)
-                LOG.info(_LI('Network %(name)s deleted.') % {'name': pg.name})
-                self._remove_port_group(pg)
-                return True
-            except vim.fault.ResourceInUse as e:
-                if ignore_in_use:
-                    LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
-                             % {'name': pg.name, 'message': e.message})
-                    return False
-                else:
-                    raise exceptions.wrap_wmvare_vim_exception(e)
-            except vim.fault.VimFault as e:
-                if dvs_const.DELETED_TEXT in e.message:
-                    self._remove_port_group(pg)
-                    return True
-                else:
-                    raise exceptions.wrap_wmvare_vim_exception(e)
-        return False
+        try:
+            pg_delete_task = pg.ref.Destroy_Task()
+            wait_for_task(pg_delete_task, si=self.connection)
+            LOG.info(_LI('Network %(name)s deleted.') % {'name': pg.name})
+            self._remove_port_group(pg)
+            return True
+        except vim.fault.ResourceInUse as e:
+            if ignore_in_use:
+                LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
+                         % {'name': pg.name, 'message': e.message})
+                return False
+            else:
+                raise exceptions.wrap_wmvare_vim_exception(e)
+        except vim.fault.ManagedObjectNotFound:
+            self._remove_port_group(pg)
+            return True
+        except vim.fault.VimFault as e:
+            raise exceptions.wrap_wmvare_vim_exception(e)
 
     def submit_update_ports(self, update_specs):
         return self._dvs.ReconfigureDVPort_Task(port=update_specs)
