@@ -127,9 +127,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     sg_aggr.project_id = port['tenant_id']
 
                 # Schedule for reassignment
-                if not decrement:
-                    if not sg_aggr.pg or port['port_desc'].port_group_key != sg_aggr.pg.key:
-                        sg_aggr.ports_to_assign.append(port)
+                if not decrement and (not sg_aggr.pg or port['port_desc'].port_group_key != sg_aggr.pg.key):
+                    sg_aggr.ports_to_assign.append(port)
 
                 # Prepare and apply rules to the sg_aggr
                 patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
@@ -137,15 +136,19 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
     @staticmethod
     def _select_default_vlan(sg):
-        try:
-            pg = sg.pg
-            vlans = Counter([port.get("port_desc").vlan_id for port in six.itervalues(pg.ports)])
-            if not vlans or None in vlans:
+        vlans = Counter(port.get('segmentation_id') for port in sg.ports_to_assign)
+        pg = sg.pg
+        if pg and pg.ports:
+            # Ensure that we do not set a default, if any port is not configured yet individually
+            if not all(port.get("port_desc") and port.get("port_desc").vlan_id for port in six.itervalues(pg.ports)):
                 return None
-            return vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec(vlanId=vlans.most_common(1)[0][0])
-        except AttributeError:
-            # Either pg is None or any of the port_desc in ports is None
+
+            vlans.update(port.get('segmentation_id') for port in six.itervalues(pg.ports))
+
+        if not vlans or None in vlans:
             return None
+
+        return vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec(vlanId=vlans.most_common(1)[0][0])
 
     def _apply_changed_sg_aggr(self, dvs, sg_set, sg_aggr, task):
         if not sg_aggr.dirty:
