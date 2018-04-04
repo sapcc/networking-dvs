@@ -436,25 +436,29 @@ class VCenter(object):
 
         for port in self._get_agent_ports():
             physical_network = port['physical_network']
+            port_id = port['id']
             dvs = self.network_dvs_map.get(physical_network)
             if not dvs:
-                LOG.error("Could not find switch for port %s", port)
+                LOG.error("Could not find switch for port %s", port_id)
                 continue
             sg_set = sg_util.security_group_set(port)
             if not sg_set:
-                LOG.warning("No security group set for port %s", port['id'])
+                LOG.warning("No security group set for port %s", port_id)
                 continue
+            mac_address = port['mac_address']
             pg = dvs.get_port_group_for_security_group_set(sg_set)
             if not pg:
-                LOG.warning("Could not get portgroup %s for port %s", sg_set, port['id'])
-                continue
-            pg.ports[port['mac_address']] = port
-            self.mac_port_map[port['mac_address']] = port
-            self.uuid_port_map[port['id']] = port
+                LOG.warning("Could not get portgroup %s for port %s", sg_set, port_id)
+            else:
+                pg.ports[mac_address] = port
+            self.mac_port_map[mac_address] = port
+            self.uuid_port_map[port_id] = port
 
     def vcenter_port_changes(self, changed):
         # Now we should split up the operations by port_group_key
-        for _, changed in groupby(changed, lambda x: x.port_group_key):
+
+        for _, changed in groupby(sorted(changed, key=lambda x : x.port_group_key),
+                                  lambda x: x.port_group_key):
             eventlet.spawn_n(self._vcenter_port_changes, changed)
 
     def _vcenter_port_changes(self, changed):
@@ -492,7 +496,6 @@ class VCenter(object):
 
         LOG.debug("Got port information from db for %d ports", len(port_list))
         for port in port_list:
-            port_desc = port['port_desc']
             self.queue.put(port)
 
     def start(self):
@@ -514,7 +517,9 @@ class VCenter(object):
         return True
 
     def port_by_switch(self, ports):
-        return groupby(ports, lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid))
+        return groupby(
+            sorted(ports, key=lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid)),
+                   lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid))
 
     @c_util.stats.timed()
     def bind_ports(self, ports, callback=None):

@@ -84,6 +84,7 @@ class SgAggr(object):
     project_id = attr.ib(default=None, hash=False, cmp=False)
     task = attr.ib(default=None, hash=False, cmp=False)
 
+
 @six.add_metaclass(abc.ABCMeta)
 class TrafficRuleBuilder(object):
     action = vim.dvs.TrafficRule.AcceptAction

@@ -128,7 +128,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
 
                 # Schedule for reassignment
                 if not decrement:
-                    if sg_aggr.pg and port['port_desc'].port_group_key != sg_aggr.pg.key:
+                    if not sg_aggr.pg or port['port_desc'].port_group_key != sg_aggr.pg.key:
                         sg_aggr.ports_to_assign.append(port)
 
                 # Prepare and apply rules to the sg_aggr
