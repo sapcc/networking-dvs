@@ -434,7 +434,8 @@ class VCenter(object):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
-        for port in self._get_agent_ports():
+        context = neutron.context.get_admin_context()
+        for port in self._get_agent_ports(context):
             physical_network = port['physical_network']
             port_id = port['id']
             dvs = self.network_dvs_map.get(physical_network)
@@ -487,7 +488,9 @@ class VCenter(object):
 
         # We might skip getting objects from the db here, if they are already present
         port_list = []
-        for neutron_info in self._get_ports_by_mac(macs):
+
+        context = neutron.context.get_admin_context()
+        for neutron_info in self._get_ports_by_mac(context, macs):
             mac_address = neutron_info['mac_address']
             port_id = neutron_info['port_id']
             macs.discard(mac_address)
@@ -611,7 +614,7 @@ class VCenter(object):
         LOG.debug("Read all ports")
 
     @staticmethod
-    def _query_results_to_ports(session, results):
+    def _query_results_to_ports(context, results):
         ports = {}
         for port_id, tenant_id, mac, status, admin_state_up, \
                 network_id, network_type, physical_network, segmentation_id in results:
@@ -634,15 +637,15 @@ class VCenter(object):
 
         # This can be moved to the query with sqlalchemy 1.1
         # http://docs.sqlalchemy.org/en/latest/core/functions.html#sqlalchemy.sql.functions.array_agg
-        sgpb = get_table(session.get_bind(), 'securitygroupportbindings')
-        for port_id, security_group_id in session.execute(
+        sgpb = get_table(context.session.get_bind(), 'securitygroupportbindings')
+        for port_id, security_group_id in context.session.execute(
                 select([sgpb.c.port_id, sgpb.c.security_group_id], sgpb.c.port_id.in_(six.iterkeys(ports)))):
             ports[port_id]["security_groups"].append(security_group_id)
 
         return ports.values()
 
-    def _build_port_query(self, session):
-        return session.query(models_v2.Port.id,
+    def _build_port_query(self, context):
+        return context.session.query(models_v2.Port.id,
                                  models_v2.Port.tenant_id,
                                  models_v2.Port.mac_address,
                                  models_v2.Port.status,
@@ -659,29 +662,17 @@ class VCenter(object):
                         )
 
     @enginefacade.reader
-    def _get_ports_by_mac(self, mac_addresses):
+    def _get_ports_by_mac(self, context, mac_addresses):
         if not mac_addresses:
             return []
 
-        context = neutron.context.get_admin_context()
-
-        session = context.session
-        with session.begin(subtransactions=True):
-            return self._query_results_to_ports(
-                session,
-                self._build_port_query(session).filter(models_v2.Port.mac_address.in_(mac_addresses))
-            )
+        return self._query_results_to_ports(context,
+                                            self._build_port_query(context).filter(models_v2.Port.mac_address.in_(mac_addresses))
+                                            )
 
     @enginefacade.reader
-    def _get_agent_ports(self):
-        context = neutron.context.get_admin_context()
-
-        session = context.session
-        with session.begin(subtransactions=True):
-            return self._query_results_to_ports(
-                session,
-                self._build_port_query(session)
-            )
+    def _get_agent_ports(self, context):
+        return self._query_results_to_ports(context, self._build_port_query(context))
 
     def stop(self):
         try:
