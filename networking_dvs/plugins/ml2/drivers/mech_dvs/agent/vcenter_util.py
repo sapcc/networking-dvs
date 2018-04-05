@@ -83,10 +83,10 @@ def get_cluster_ref_by_name(connection, cluster_name):
 
 @attr.s(**constants.ATTR_ARGS)
 class _DVSPortDesc(object):
-    dvs_uuid = attr.ib(convert=str, cmp=True)
-    port_key = attr.ib(convert=str, cmp=True) # It is an int, but the WDSL defines it as a string
+    dvs_uuid = attr.ib(convert=str, cmp=True, hash=True)
+    port_key = attr.ib(convert=str, cmp=True, hash=True) # It is an int, but the WDSL defines it as a string
     port_group_key = attr.ib(convert=str)
-    mac_address = attr.ib(convert=str)
+    mac_address = attr.ib(convert=str, cmp=True, hash=True)
     connection_cookie = attr.ib(convert=str)  # Same as with port_key, int which is represented as a string
     connected = attr.ib(default=False)
     status = attr.ib(convert=str, default='')
@@ -457,9 +457,10 @@ class VCenter(object):
     def vcenter_port_changes(self, changed):
         # Now we should split up the operations by port_group_key
 
-        for _, changed in groupby(sorted(changed, key=lambda x : x.port_group_key),
+        for _, ports in groupby(sorted(changed, key=lambda x : x.port_group_key),
                                   lambda x: x.port_group_key):
-            eventlet.spawn_n(self._vcenter_port_changes, changed)
+            # The grouper needs to be converted to a list, otherwise we drop items
+            eventlet.spawn_n(self._vcenter_port_changes, list(ports))
 
     def _vcenter_port_changes(self, changed):
         ports_by_mac = defaultdict(dict)
@@ -477,8 +478,12 @@ class VCenter(object):
                 dvs.remove_port_by_port_desc(port_desc)
                 ports_by_mac.pop(port_desc.mac_address, None)
 
-        self._read_dvs_ports(ports_by_mac)
         macs = set(six.iterkeys(ports_by_mac))
+        if not macs:  # Maybe all the ports have been deleted
+            return
+
+        LOG.debug("Got the following macs %s", macs)
+        self._read_dvs_ports(ports_by_mac)
 
         # We might skip getting objects from the db here, if they are already present
         port_list = []
