@@ -314,7 +314,8 @@ class DVSController(object):
             return
         self._port_groups_by_ref[pg.ref._moId] = pg
         self._port_groups_by_key[pg.key] = pg
-        self._port_groups_by_name[pg.name] = pg
+        if pg.name:
+            self._port_groups_by_name[pg.name] = pg
 
     def _remove_port_group(self, pg):
         if not pg:
@@ -587,19 +588,19 @@ class DVSController(object):
                             # update.obj
                             props = {prop.name: prop.val for prop in update.changeSet}
                             pg = self._port_groups_by_ref.get(update.obj)
+
                             if pg:  # Update
+                                self._remove_port_group(pg)
                                 if 'name' in props:
                                     pg.name = props['name']
                                 if 'key' in props:  # Should never change, but hey...
                                     pg.name = props['key']
                                 if 'config.description':
                                     pg.description = props['description']
-
-                                self._remove_port_group(pg)
                             else:
                                 pg = PortGroup(ref=update.obj,
                                                key=props.get('key') or update.obj.key,
-                                               name=props['name'],
+                                               name=props.get('name'),
                                                description=props.pop("config.description", ""),
                                                config_version=props.pop("config.configVersion", None),
                                                default_port_config=props.pop("config.defaultPortConfig", None),
