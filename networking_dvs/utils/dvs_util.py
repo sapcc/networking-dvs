@@ -642,7 +642,7 @@ class DVSController(object):
         try:
             pg_spec = builder.pg_config(port_config)
             pg_spec.name = dvpg_name
-            pg_spec.numPorts = 0
+            pg_spec.numPorts = CONF.DVS.default_initial_num_ports
             pg_spec.type = 'earlyBinding'
             pg_spec.description = sg_set
 

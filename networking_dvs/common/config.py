@@ -67,6 +67,9 @@ dvs_opts = [
     cfg.IntOpt('max_ports_per_iteration',
                default=5,
                help=_("Number of ports to get per iteration")),
+    cfg.IntOpt('default_initial_num_ports',
+               default=2,
+               help=_("Number of ports a newly created port-group should have")),
 ]
 
 cfg.CONF.register_opts(dvs_opts, "DVS")
