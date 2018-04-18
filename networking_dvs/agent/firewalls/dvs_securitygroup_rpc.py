@@ -81,10 +81,11 @@ class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc, SecurityGrou
                 port = ports.get(port_id)
                 if not port:
                     port = copy(self.v_center.get_port_by_uuid(port_id))
-                    port['security_group_source_groups'] = []
-                    port['security_group_rules'] = []
-                    port['security_groups'] = [security_group_id]
-                    ports[port_id] = port
+                    if port:
+                        port['security_group_source_groups'] = []
+                        port['security_group_rules'] = []
+                        port['security_groups'] = [security_group_id]
+                        ports[port_id] = port
                 else:
                     port['security_groups'].append(security_group_id)
         return ports
