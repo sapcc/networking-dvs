@@ -440,7 +440,7 @@ class VCenter(object):
             port_id = port['id']
             dvs = self.network_dvs_map.get(physical_network)
             if not dvs:
-                LOG.error("Could not find switch for port %s", port_id)
+                LOG.error("Could not find switch for the physical network %s (port %s)", physical_network, port_id)
                 continue
             sg_set = sg_util.security_group_set(port)
             if not sg_set:
