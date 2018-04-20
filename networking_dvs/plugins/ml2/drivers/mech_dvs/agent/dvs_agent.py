@@ -173,6 +173,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             return {}
 
         sg_set = sg_util.security_group_set(port)
+        if not sg_set:
+            return {}
 
         self.max_mtu = dvs.mtu
         self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
@@ -186,7 +188,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         if not pg:
             LOG.warning("Failed to create port-group")
-            return None
+            return {}
 
         return {"bridge_name": pg.name}
 
