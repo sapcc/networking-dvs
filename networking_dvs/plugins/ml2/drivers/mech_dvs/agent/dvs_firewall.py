@@ -166,19 +166,22 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         sg_set_rules = sg_util.get_rules(sg_aggr)
 
         port_config = vim.VMwareDVSPortSetting()
-        port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
+
+        if sg_set_rules:
+            port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
+        else:
+            LOG.debug("No rules left for %s", sg_set)
+            port_config.filterPolicy = builder.filter_policy([])
+
         vlan = self._select_default_vlan(sg_aggr)
         if vlan:
             port_config.vlan = vlan
 
         if sg_aggr.pg:
-            if len(sg_set_rules) == 0:
-                LOG.debug("No rules left")
-            else:
-                old_task = sg_aggr.pg.task
-                new_task = eventlet.spawn(dvs.update_dvportgroup, sg_aggr.pg, port_config, sync=old_task)
-                sg_aggr.pg.task = new_task
-                new_task.wait()
+            old_task = sg_aggr.pg.task
+            new_task = eventlet.spawn(dvs.update_dvportgroup, sg_aggr.pg, port_config, sync=old_task)
+            sg_aggr.pg.task = new_task
+            new_task.wait()
             self._reassign_ports(sg_aggr)
         else:
             self._create_dvpg_and_update_sg_aggr(dvs,
