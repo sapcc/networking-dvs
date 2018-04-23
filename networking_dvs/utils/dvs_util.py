@@ -437,7 +437,7 @@ class DVSController(object):
 
         for port_group, pg_update_specs in ports_by_portgroup:
             old_task = port_group.task
-            port_group.task = spawn(self._apply_queued_update_specs, update_specs, callbacks, sync=old_task)
+            port_group.task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
 
     def _apply_queued_update_specs(self, update_specs, callbacks, retries=5, sync=None):
         if not update_specs:
