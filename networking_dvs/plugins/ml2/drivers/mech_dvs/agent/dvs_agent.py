@@ -46,6 +46,7 @@ from networking_dvs.common import constants as dvs_const, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
 from networking_dvs.common.util import stats
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util, spec_builder as builder
+from pyVmomi import vim
 
 LOG = logging.getLogger(__name__)
 
@@ -179,10 +180,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.max_mtu = dvs.mtu
         self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
 
-        sg_set_rules = []
-
-        port_config = sg_util.port_configuration(None, sg_set_rules, {}, None, None).setting
-        port_config.vlan = builder.vlan(dvs_segment["segmentation_id"])
+        port_config = vim.VMwareDVSPortSetting(
+            vlan=builder.vlan(dvs_segment['segmentation_id']),
+            filterPolicy=builder.filter_policy(None)
+        )
 
         pg = dvs.create_dvportgroup(sg_set, port_config, update=False)
 

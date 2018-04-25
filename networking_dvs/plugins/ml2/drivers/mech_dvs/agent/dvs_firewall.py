@@ -168,7 +168,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         port_config = vim.VMwareDVSPortSetting()
 
         if sg_set_rules:
-            port_config.filterPolicy = sg_util.filter_policy(sg_rules=sg_set_rules)
+            port_config.filterPolicy = sg_util.compile_filter_policy(sg_rules=sg_set_rules)
         else:
             LOG.debug("No rules left for %s", sg_set)
             port_config.filterPolicy = builder.filter_policy([])

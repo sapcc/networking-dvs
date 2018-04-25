@@ -289,7 +289,7 @@ def get_port_rules(ports):
     return build_port_rules(ports, hashed_rules)
 
 
-def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
+def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
     rules = []
@@ -333,8 +333,8 @@ def filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
 
 def port_configuration(port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
     setting = vim.VMwareDVSPortSetting()
-    setting.filterPolicy = filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
-                                         filter_config_key=filter_config_key)
+    setting.filterPolicy = compile_filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
+                                                 filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
 
