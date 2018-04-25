@@ -127,8 +127,8 @@ def neutron_to_port_config_spec(port):
     return port_config_spec(version=port_desc.config_version,
                             key=port_desc.port_key,
                             setting=setting,
-                            name=port["port_id"],
-                            description=port["network_id"])
+                            name=port['port_id'],
+                            description=port['network_id'])
 
 
 def wait_options(max_wait_seconds=None, max_object_updates=None):

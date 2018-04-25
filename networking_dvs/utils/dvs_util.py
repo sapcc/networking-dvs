@@ -86,12 +86,12 @@ def dvportgroup_name(uuid, sg_set):
     """
     # There is an upper limit on managed object names in vCenter
     dvs_id = dvportgroup_suffix(uuid)
-    name = sg_set + "-" + dvs_id
+    name = sg_set + '-' + dvs_id
     if len(name) > 80:
         # so we use a hash of the security group set
         hex = hashlib.sha224()
         hex.update(sg_set)
-        name = hex.hexdigest() + "-" + dvs_id
+        name = hex.hexdigest() + '-' + dvs_id
 
     return name
 
@@ -147,16 +147,16 @@ class PortGroup(object):
                              cmp=False)  # Actually an int, but represented as a string
     default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
     task = attr.ib(default=None, hash=False, repr=False, cmp=False)
-    ports = attr.ib(default=attr.Factory(dict))  # mac-address -> port
+    ports = attr.ib(default=attr.Factory(dict), hash=False, cmp=False)  # mac-address -> port
 
     def fetch(self, connection):
         result = util.get_object_properties_dict(connection, self.ref,
-                                                 ["config.configVersion", "config.defaultPortConfig"])
-        self.config_version = result.pop("config.configVersion", None)
-        self.default_port_config = result.pop("config.defaultPortConfig", None)
+                                                 ['config.configVersion', 'config.defaultPortConfig'])
+        self.config_version = result.pop('config.configVersion', None)
+        self.default_port_config = result.pop('config.defaultPortConfig', None)
 
 
-@trace_cls("vmwareapi", hide_args=True)
+@trace_cls('vmwareapi', hide_args=True)
 class DVSController(object):
     """Controls one DVS."""
 
@@ -214,7 +214,7 @@ class DVSController(object):
                             countdown[pg.ref._moId] = value
                         else:
                             to_delete.append(pg)
-                except vim.fault.ManagedObjectNotFound:
+                except vmodl.fault.ManagedObjectNotFound:
                     to_delete.append(pg)
             for pg in to_delete:
                 if quit_event.ready():
@@ -235,7 +235,7 @@ class DVSController(object):
         if not port_desc:
             return
         existing_port = self.ports_by_key.get(port_desc.port_key)
-        if not existing_port or existing_port["mac_address"] != port_desc.mac_address:
+        if not existing_port or existing_port['mac_address'] != port_desc.mac_address:
             port = {
                 'mac_address': port_desc.mac_address,
                 'port_desc': port_desc,
@@ -252,7 +252,7 @@ class DVSController(object):
 
             return port
         else:
-            existing_port["port_desc"] = port_desc
+            existing_port['port_desc'] = port_desc
             return existing_port
 
     def remove_port_by_port_desc(self, port_desc):
@@ -432,10 +432,11 @@ class DVSController(object):
         if not update_specs:
             return
 
-        ports_by_portgroup = itertools.groupby(update_specs,
-                                               lambda spec: self.get_port_group_for_port(self.ports_by_key[spec.key]))
+        ports_by_portgroup = defaultdict(list)
+        for spec in update_specs:
+            ports_by_portgroup[self.get_port_group_for_port(self.ports_by_key[spec.key])].append(spec)
 
-        for port_group, pg_update_specs in ports_by_portgroup:
+        for port_group, pg_update_specs in six.iteritems(ports_by_portgroup):
             old_task = port_group.task
             port_group.task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
 

@@ -27,7 +27,6 @@ import attr
 import six
 
 from collections import defaultdict
-from itertools import groupby
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.db import models_v2
@@ -457,11 +456,12 @@ class VCenter(object):
 
     def vcenter_port_changes(self, changed):
         # Now we should split up the operations by port_group_key
+        by_port_group_key = defaultdict(list)
+        for change in changed:
+            by_port_group_key[change.port_group_key].append(change)
 
-        for _, ports in groupby(sorted(changed, key=lambda x : x.port_group_key),
-                                  lambda x: x.port_group_key):
-            # The grouper needs to be converted to a list, otherwise we drop items
-            eventlet.spawn_n(self._vcenter_port_changes, list(ports))
+        for changes in six.itervalues(by_port_group_key):
+            eventlet.spawn_n(self._vcenter_port_changes, changes)
 
     def _vcenter_port_changes(self, changed):
         ports_by_mac = defaultdict(dict)
@@ -525,9 +525,11 @@ class VCenter(object):
         return True
 
     def port_by_switch(self, ports):
-        return groupby(
-            sorted(ports, key=lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid)),
-                   lambda port: self.get_dvs_by_uuid(port['port_desc'].dvs_uuid))
+        by_switch = defaultdict(list)
+        for port in ports:
+            by_switch[self.get_dvs_by_uuid(port['port_desc'].dvs_uuid)].append(port)
+
+        return six.iteritems(by_switch)
 
     @c_util.stats.timed()
     def bind_ports(self, ports, callback=None):
