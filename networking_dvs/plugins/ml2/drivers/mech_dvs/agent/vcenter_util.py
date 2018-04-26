@@ -95,8 +95,7 @@ class _DVSPortDesc(object):
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
     connected_since = attr.ib(default=None)
-    firewall_start = attr.ib(default=None)
-    firewall_end = attr.ib(default=None)
+    port_group_history = attr.ib(default=attr.Factory(list), cmp=False, hash=False)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
@@ -326,14 +325,9 @@ class VCenterMonitor(object):
                         self._handle_port_update(port_desc, now)
                     elif 'backing.port.portgroupKey' == attribute:
                         change_val = str(change_val)
+                        port_desc.port_group_history.append(port_desc.port_group_key)
+                        port_desc.port_group_history = [key for key in port_desc.port_group_history if key != change_val]
                         port_desc.port_group_key = change_val
-                        # An update on the portgroup keys means
-                        # that the virtual machine got reassigned
-                        # to a different distributed virtual portgroup,
-                        # most likely as a result of the firewall driver.
-                        if port_desc.firewall_start:
-                            port_desc.firewall_end = timeutils.utcnow() - port_desc.firewall_start
-                            LOG.debug("Port reassigned in %d seconds.", port_desc.firewall_end.seconds)
                         self._handle_port_update(port_desc, now)
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref, change_val)
@@ -457,13 +451,7 @@ class VCenter(object):
             self.uuid_port_map[port_id] = port
 
     def vcenter_port_changes(self, changed):
-        # Now we should split up the operations by port_group_key
-        by_port_group_key = defaultdict(list)
-        for change in changed:
-            by_port_group_key[change.port_group_key].append(change)
-
-        for changes in six.itervalues(by_port_group_key):
-            eventlet.spawn_n(self._vcenter_port_changes, changes)
+        eventlet.spawn_n(self._vcenter_port_changes, changed)
 
     def _vcenter_port_changes(self, changed):
         ports_by_mac = dict()

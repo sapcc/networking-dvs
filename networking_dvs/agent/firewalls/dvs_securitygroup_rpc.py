@@ -12,94 +12,413 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-from oslo_log import log as logging
-
-from neutron.agent import securitygroups_rpc
-import neutron.context
+import weakref
+from collections import defaultdict, Counter
 from copy import copy
-from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin
-from neutron.i18n import _LI
+
+import attr
+import eventlet
+import six
+from netaddr import IPNetwork
 from oslo_db.sqlalchemy import enginefacade
-from oslo_db.sqlalchemy.utils import get_table
-from sqlalchemy.sql import select
+from oslo_log import log as logging
+from oslo_concurrency import lockutils
+from pyVmomi import vim
+from sqlalchemy.sql import distinct, or_
+
+from networking_dvs.common import exceptions
+from networking_dvs.common.constants import DVS, ATTR_ARGS
+from networking_dvs.common.db import string_agg
+from networking_dvs.common.util import stats
+from networking_dvs.utils import security_group_utils as sg_util
+from networking_dvs.utils import spec_builder as builder
+from networking_dvs.utils.dvs_util import dvportgroup_name
+from neutron.db import securitygroups_db as sg_db
+from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin, DIRECTION_IP_PREFIX
+from neutron.plugins.ml2.models import PortBindingLevel
+from neutron import context as neutron_context
 
 LOG = logging.getLogger(__name__)
 
+ANY_IPV4 = IPNetwork('0.0.0.0/0', version=4)
+ANY_IPV6 = IPNetwork('::/0', version=6)
 
-class DVSSecurityGroupRpc(securitygroups_rpc.SecurityGroupAgentRpc, SecurityGroupServerRpcMixin):
-    def __init__(self, *args, **kwargs):
-        super(DVSSecurityGroupRpc, self).__init__(*args, **kwargs)
-        self.context = neutron.context.get_admin_context()
-        if self.firewall:
-            self.v_center = self.firewall.v_center
+
+@attr.s(**ATTR_ARGS)
+class SecurityGroup(object):
+    id_ = attr.ib()
+    project_id = attr.ib(default=None)
+    rules = attr.ib(default=attr.Factory(list))
+    port_groups_by_dvs = attr.ib(default=attr.Factory(lambda: defaultdict(dict)))
+    security_group_source_groups = attr.ib(default=attr.Factory(set))
+    dependent_groups = attr.ib(default=attr.Factory(set))
+
+
+class Any(object):
+    def __init__(self, *answer): self.answer = answer
+
+    def get(self, _): return self.answer
+
+
+class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
+    def __init__(self, context=None, plugin_rpc=None, v_center=None, config=None):
+        super(DVSSecurityGroupRpc, self).__init__()
+        self.context = context or neutron_context.get_admin_context()
+        self.plugin_rpc = plugin_rpc
+        self.v_center = v_center
+        self.config = config
+        self._security_groups = dict()  # id -> SecurityGroup
+        self._portgroup_to_security_groups = dict()
+        provider_rules = {'network_id': None, 'security_group_rules': []}
+        self._add_ingress_ra_rule(provider_rules, Any(ANY_IPV6))
+        self._add_ingress_dhcp_rule(provider_rules, Any(ANY_IPV4, ANY_IPV6))
+        self._provider_rules = sg_util.patch_sg_rules(provider_rules['security_group_rules'])
+        self._to_refresh = set()
+        self._update_security_groups(self.context)
+
+    ##
+    #
+
+    def _get_security_group_obj(self, security_group_id):
+        sg = self._security_groups.get(security_group_id)
+
+        if not sg:
+            sg = SecurityGroup(id_=security_group_id)
+            self._security_groups[security_group_id] = sg
+
+        return sg
+
+    def _find_security_groups_for_port_group(self, pg):
+        if not pg:
+            return
+        sgs = self._portgroup_to_security_groups.get(pg.name)
+        if sgs:
+            return sgs
+
+        sgs = pg.description.split(',')
+        if len(sgs[0]) == 36:
+            return sgs
         else:
-            self.v_center = None
+            sg_binding_sgid = sg_db.SecurityGroupPortBinding.security_group_id
+            constraints=[sg_binding_sgid.startswith(sg_prefix) for sg_prefix in sgs]
+            for t in self._get_active_security_group_tuples(self.context, constraints=or_(*constraints)):
+                if len(t) == len(sgs):
+                    self._portgroup_to_security_groups[pg.name] = t
+                    return t
 
-    def prepare_devices_filter(self, device_ids):
-        if not device_ids:
+    def _refresh_async(self):
+        to_refresh = self._to_refresh
+        self._to_refresh = set()
+        if to_refresh:
+            self._update_security_groups(self.context, to_refresh)
+
+    def _port_group_added_callback(self, dvs, pg):
+        sg_ids = self._find_security_groups_for_port_group(pg)
+        if not sg_ids:
             return
-        LOG.info(_LI("Preparing filters for devices %s"), device_ids)
 
-        devices = self.get_security_group_rules_for_devices(list(device_ids))
-        self.firewall.prepare_port_filter(devices)
+        for sg_id in sg_ids:
+            sg = self._get_security_group_obj(sg_id)
+            LOG.debug("Storing %s for security-group %s", pg.name, sg_id)
+            sg.port_groups_by_dvs[dvs.uuid][pg.name] = weakref.ref(pg)
+            self._to_refresh.add(sg_id)
+        eventlet.spawn_after(0.25, self._refresh_async)
 
-    def remove_devices_filter(self, device_ids):
-        if not device_ids:
+    def _port_group_removed_callback(self, dvs, pg):
+        sg_ids = self._find_security_groups_for_port_group(pg)
+        if not sg_ids:
             return
-        LOG.info(_LI("Remove device filter for %r"), device_ids)
-        self.firewall.remove_port_filter(device_ids)
 
-    def refresh_firewall(self, device_ids=None):
-        LOG.info(_LI("Refresh firewall rules for '{}'").format(device_ids))
-        if not device_ids:
-            device_ids = self.firewall.ports.keys()
-            if not device_ids:
-                LOG.info(_LI("No ports here to refresh firewall"))
-                return
+        dvs_uuid = dvs.uuid
+        for security_group_id in sg_ids:
+            self._remove_port_group_from_security_group(security_group_id, dvs_uuid, pg.name)
 
-        devices = self.get_security_group_rules_for_devices(list(device_ids))
-        self.firewall.update_port_filter(devices)
+        self._portgroup_to_security_groups.pop(pg.name, None)
 
-    def get_security_group_rules_for_devices(self, device_ids):
-        return self.get_security_group_rules_for_devices_db(device_ids)
-        # return self.get_security_group_rules_for_devices_rpc(device_ids, chunk_size=1)
+    def _remove_port_group_from_security_group(self, security_group_id, dvs_uuid, pg_name):
+        sg = self._security_groups.get(security_group_id)
+        if not sg:
+            return
+
+        sg.port_groups_by_dvs[dvs_uuid].pop(pg_name, None)
+
+        for ref_id in sg.security_group_source_groups:
+            ref_sg = self._security_groups.get(ref_id)
+            if ref_sg:
+                ref_sg.dependent_groups.discard(security_group_id)
+
+        if not sg.port_groups_by_dvs[dvs_uuid]:
+            sg.port_groups_by_dvs.pop(dvs_uuid, None)
+
+        if not sg.port_groups_by_dvs and not sg.dependent_groups:
+            self._security_groups.pop(sg.id_, None)
 
     @enginefacade.reader
-    def get_ports_from_devices(self, devices):
-        ports = {}
+    def _setup_port_groups(self, context, security_group_ids=None):
+        local_security_groups = set()
+        for security_groups in self._get_active_security_group_tuples(context,
+                                                                      security_group_ids=security_group_ids):
+            sg_set = sg_util.security_group_set({'security_groups': security_groups})
+            for dvs_uuid, dvs in six.iteritems(self.v_center.uuid_dvs_map):
+                dvs.port_group_added.add(self._port_group_added_callback)
+                dvs.port_group_removed.add(self._port_group_removed_callback)
+                port_group_name = dvportgroup_name(dvs_uuid, sg_set)
+                for security_group_id in security_groups:
+                    local_security_groups.add(security_group_id)
+                    sg = self._get_security_group_obj(security_group_id)
+                    self._portgroup_to_security_groups[port_group_name] = security_groups
+                    sg.port_groups_by_dvs[dvs_uuid][port_group_name] = None  # We will have to fetch that object later
 
-        if not devices:
-            return ports
+        return local_security_groups
 
-        session = self.context.session
+    @lockutils.synchronized(__name__)
+    @enginefacade.reader
+    def _update_security_groups(self, context, security_group_ids=None):
+        security_group_ids = self._setup_port_groups(context, security_group_ids)
+        if not security_group_ids:
+            return
 
-        with session.begin(subtransactions=True):
-            sgpb = get_table(session.get_bind(), 'securitygroupportbindings')
-            for port_id, security_group_id in session.execute(
-                    select([sgpb.c.port_id, sgpb.c.security_group_id],
-                           sgpb.c.port_id.in_(devices))):
-                port = ports.get(port_id)
-                if not port:
-                    port = copy(self.v_center.get_port_by_uuid(port_id))
-                    if port:
-                        port['security_group_source_groups'] = []
-                        port['security_group_rules'] = []
-                        port['security_groups'] = [security_group_id]
-                        ports[port_id] = port
-                else:
-                    port['security_groups'].append(security_group_id)
-        return ports
+        to_configure = set()
+        once = True  # Only refresh port-group once
+        for sg_id, rules in six.iteritems(self._security_group_rules_for_security_groups(context, security_group_ids)):
+            sg = self._security_groups[sg_id]
+            sg.project_id = rules['tenant_id']
+
+            current_source_groups = set(rules['security_group_source_groups'])
+            old_source_groups = sg.security_group_source_groups
+            for ref_id in current_source_groups - old_source_groups:
+                referenced = self._get_security_group_obj(ref_id)
+                referenced.dependent_groups.add(sg_id)
+            for ref_id in old_source_groups - current_source_groups:
+                referenced = self._get_security_group_obj(ref_id)
+                referenced.dependent_groups.pop(sg_id)
+            sg.security_group_source_groups = current_source_groups
+
+            sg.rules = sg_util.patch_sg_rules(rules['security_group_rules'])
+            dvs_uuids = list(six.iterkeys(sg.port_groups_by_dvs))
+            for dvs_uuid in dvs_uuids:
+                dvs = self.v_center.uuid_dvs_map.get(dvs_uuid)
+                if not dvs:
+                    LOG.warning("No DVS for %s", dvs_uuid)
+                    continue
+
+                port_groups = sg.port_groups_by_dvs.get(dvs_uuid)
+                names = list(six.iterkeys(port_groups))
+                for port_group_name in names:
+                    port_group = port_groups.get(port_group_name)
+                    if port_group:
+                        to_configure.add((dvs, port_group_name, port_group))
+                    else:
+                        try:
+                            port_group = weakref.ref(dvs.get_portgroup_by_name(port_group_name, refresh_if_missing=once))
+                            port_groups[port_group_name] = port_group
+                            to_configure.add((dvs, port_group_name, port_group))
+                        except exceptions.PortGroupNotFound:
+                            once = False
+                            LOG.warn("Could not find port-group %s for security-group %s", port_group_name, sg_id)
+                            port_groups.pop(port_group_name, None)
+                            continue
+
+        for dvs, port_group_name, port_group in to_configure:
+            port_group = port_group()
+            if not port_group:
+                port_group_security_group_ids = self._portgroup_to_security_groups.get(port_group_name) or []
+                # Port-group is gone now, so we clean it up
+                dvs_uuid = dvs.uuid
+                for security_group_id in port_group_security_group_ids:
+                    self._remove_port_group_from_security_group(security_group_id, dvs_uuid, port_group_name)
+                self._portgroup_to_security_groups.pop(port_group_name, None)
+            else:
+                port_group_security_group_ids = self._find_security_groups_for_port_group(port_group)
+                port_config, project_id = self.compile_rules(port_group_security_group_ids)
+
+                vlan = self._select_default_vlan(port_group)
+                if vlan:
+                    port_config.vlan = vlan
+
+                old_task = port_group.task
+                new_task = eventlet.spawn(dvs.update_dvportgroup, port_group, port_config, sync=old_task)
+                port_group.task = new_task
+                sg_tags = ['port_group:' + port_group_name,
+                           'security_group:' + '-'.join(port_group_security_group_ids),
+                           'host:' + self.config.host]
+
+                if project_id:
+                    sg_tags.append('project_id:' + project_id),
+
+                num_rules = len(port_config.filterPolicy.filterConfig[0].trafficRuleset.rules)
+                stats.gauge('networking_dvs._apply_changed_sg_aggr.security_group_rules', num_rules, tags=sg_tags)
+
+    def compile_rules(self, security_group_ids):
+        port_config = vim.VMwareDVSPortSetting()
+        if not security_group_ids:
+            return port_config, None
+
+        rules = set(self._provider_rules)
+        project_id = None
+        missing = False
+        for security_group_id in security_group_ids:
+            sg = self._security_groups.get(security_group_id)
+            if not sg:
+                LOG.warn("Have not loaded security-group %s", security_group_id)
+                missing = True
+            project_id = project_id or sg.project_id
+            rules.update(sg.rules)
+
+        if missing:
+            port_config.filterPolicy = builder.filter_policy([])
+        else:
+            sg_rules = sg_util.consolidate_rules(rules)
+            port_config.filterPolicy = sg_util.compile_filter_policy(sg_rules=sg_rules)
+
+        return port_config, project_id
+
+    @staticmethod
+    def _select_default_vlan(port_group):
+        if not port_group or not port_group.ports:
+            return None
+
+        ports = six.viewvalues(port_group.ports)
+
+        # Ensure that we do not set a default, if any port is not configured yet individually
+        if not all(port.get('port_desc')
+                   and port.get('port_desc').vlan_id for port in ports):
+            return None
+
+        vlans = Counter(port.get('segmentation_id') for port in ports)
+
+        if None in vlans:
+            return None
+
+        return vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec(vlanId=vlans.most_common(1)[0][0])
+
+    ##
+    # Called as RPC
+
+    def security_groups_rule_updated(self, security_groups):
+        """Callback for security group rule update.
+
+        :param security_groups: list of updated security_groups
+        """
+        if not security_groups:
+            return
+
+        self._to_refresh.update(security_groups)
+        eventlet.spawn_after(0.25, self._refresh_async)  # This way, we can accumulated some changes
+
+    def security_groups_member_updated(self, security_groups):
+        """Callback for security group member update.
+
+        :param security_groups: list of updated security_groups
+        """
+        if not security_groups:
+            return
+
+        dependent_groups = [group
+                            for sg_id in security_groups
+                            if sg_id in self._security_groups
+                            for group in self._security_groups.get(sg_id).dependent_groups
+                            ]
+
+        self._to_refresh.update(dependent_groups)
+        eventlet.spawn_after(0.25, self._refresh_async)  # This way, we can accumulated some changes
+
+    def security_groups_provider_updated(self, devices_to_update):
+        """Callback for security group provider update.
+        :param devices_to_update: list of devices to update
+        """
+        if not devices_to_update:
+            return
+
+    ####
+    # end of RPC-API
 
     @enginefacade.reader
-    def get_security_group_rules_for_devices_db(self, device_ids):
-        LOG.debug("Querying database for %s", device_ids)
-        ports = self.get_ports_from_devices(device_ids)
-        return self.security_group_rules_for_ports(self.context, ports).values()
+    def _get_active_security_group_tuples(self, context, security_group_ids=None, constraints=None):
+        session = context.session
+        sg_binding_port = sg_db.SecurityGroupPortBinding.port_id
+        sg_binding_sgid = sg_db.SecurityGroupPortBinding.security_group_id
 
-    def get_security_group_rules_for_devices_rpc(self, device_ids, chunk_size=50):
-        devices = []
-        for i in range(0, len(device_ids), chunk_size):
-            devices.extend(
-                self.plugin_rpc.security_group_rules_for_devices(self.context, device_ids[i:i+chunk_size]).values()
-            )
-        return devices
+        security_groups = []
+        separator = ','
+
+        query = session.query(distinct(string_agg(sg_binding_sgid, separator, sg_binding_sgid))). \
+            join(PortBindingLevel, PortBindingLevel.port_id == sg_binding_port). \
+            filter(PortBindingLevel.host == self.config.host,
+                   PortBindingLevel.driver == DVS,
+                   PortBindingLevel.segment_id.isnot(None),  # Unbound ports
+                   )
+
+        if constraints is not None:
+            query = query.filter(constraints)
+
+        if security_group_ids is not None:
+            subquery = session.query(sg_binding_port).\
+                join(PortBindingLevel, PortBindingLevel.port_id == sg_binding_port). \
+                filter(PortBindingLevel.host == self.config.host,
+                   PortBindingLevel.driver == DVS,
+                   PortBindingLevel.segment_id.isnot(None),  # Unbound ports
+                   sg_binding_sgid.in_(security_group_ids)
+                   ).subquery()
+            query = query.filter(sg_binding_port.in_(subquery))
+
+        for sgs, in query.group_by(sg_binding_port):
+            security_groups.append(sgs.split(separator))
+
+        return security_groups
+
+    ##
+    # We hopefully can move the following two functions into neutron
+
+    @staticmethod
+    def _select_rules_for_security_groups(context, security_groups):
+        if not security_groups:
+            return []
+
+        sg_id = sg_db.SecurityGroup.id
+        tenant_id = sg_db.SecurityGroup.tenant_id
+        sgr_sgid = sg_db.SecurityGroupRule.security_group_id
+
+        query = context.session.query(sg_id,
+                                      tenant_id,
+                                      sg_db.SecurityGroupRule)
+        query = query.join(sg_db.SecurityGroupRule,
+                           sgr_sgid == sg_id)
+        query = query.filter(sg_id.in_(security_groups))
+
+        return query.all()
+
+    def _security_group_rules_for_security_groups(self, context, security_groups):
+        if not security_groups:
+            return {}
+
+        rules_in_db = self._select_rules_for_security_groups(context, security_groups)
+        security_groups_result = {}
+        for (sg_id, tenant_id, rule_in_db) in rules_in_db:
+            security_group = security_groups_result.get(sg_id)
+            if not security_group:
+                security_group = {
+                    'security_group_source_groups': [],
+                    'security_group_rules': [],
+                    'security_groups': [sg_id],
+                    'tenant_id': tenant_id
+                }
+                security_groups_result[sg_id] = security_group
+
+            direction = rule_in_db['direction']
+            rule_dict = {
+                # 'security_group_id' Removed, as it isn't used
+                'direction': direction,
+                'ethertype': rule_in_db['ethertype'],
+            }
+            for key in ('protocol', 'port_range_min', 'port_range_max',
+                        'remote_ip_prefix', 'remote_group_id'):
+                if rule_in_db.get(key) is not None:
+                    if key == 'remote_ip_prefix':
+                        direction_ip_prefix = DIRECTION_IP_PREFIX[direction]
+                        rule_dict[direction_ip_prefix] = rule_in_db[key]
+                        continue
+                    rule_dict[key] = rule_in_db[key]
+            security_group['security_group_rules'].append(rule_dict)
+
+        return self._convert_remote_group_id_to_ip_prefix(context, security_groups_result)

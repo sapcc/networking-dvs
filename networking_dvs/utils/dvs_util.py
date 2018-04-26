@@ -196,10 +196,10 @@ class DVSController(object):
             spawn(self._background_task, quit_event)
 
     def _background_task(self, quit_event):
-        countdown = defaultdict(lambda: 10)
+        countdown = defaultdict(lambda: 5)
         suffix = '-' + dvportgroup_suffix(self.uuid)
         while not quit_event.ready():
-            for _ in six.moves.xrange(60):
+            for _ in six.moves.xrange(6):
                 if quit_event.ready():
                     return
                 sleep(1)
@@ -246,6 +246,12 @@ class DVSController(object):
                     }
         else:
             port = existing_port
+            # Clean up the history
+            for port_group_key in port_desc.port_group_history:
+                old_port_group = self._port_groups_by_key.get(port_group_key)
+                if old_port_group:
+                    old_port_group.ports.pop(port_desc.mac_address, None)
+            port_desc.port_group_history = []
 
         # assert('port_desc' not in port or port['port_desc'] == port_desc or )
         port['port_desc'] = port_desc

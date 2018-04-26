@@ -49,6 +49,7 @@ from networking_dvs.common.util import stats, dict_merge
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util, spec_builder as builder
 
 from pyVmomi import vim
+from pyVim.task import WaitForTask as wait_for_task
 
 LOG = logging.getLogger(__name__)
 
@@ -69,19 +70,6 @@ CONF.register_cli_opts(_core_opts)
 def touch_file(fname, times=None):
     with open(fname, 'a'):
         os.utime(fname, times)
-
-
-def _touch_fw_timestamp(ports, now=None):
-    """ Set a timestamp on the ports to measure firewall latency """
-    if not ports or len(ports) == 0:
-        return
-    now = now or timeutils.utcnow()
-    for port in ports:
-        port_desc = port.get('port_desc')
-        if not port_desc:
-            LOG.debug("Port {} has no description object.".format(port['id']))
-            continue
-        port_desc.firewall_start = now
 
 
 @trace_cls("rpc")
@@ -142,11 +130,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if self.enable_security_groups:
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
                                                         self.sg_plugin_rpc,
-                                                        local_vlan_map=None,
-                                                        integration_bridge=self.api,  # Passed on to FireWall Driver
-                                                        defer_refresh_firewall=True)  # Can only be false, if ...
-            # ... we keep track of all the security groups of a port, and probably more changes
-
+                                                        self.api,
+                                                        self.conf)
         self.run_daemon_loop = True
         self.iter_num = 0
 
@@ -304,8 +289,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         with stats.timed('%s.%s' % (self.__module__, self.__class__.__name__)):
             neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
-                                                                           agent_id=self.agent_id,
-                                                                           host=self.conf.host)
+                                                                     agent_id=self.agent_id,
+                                                                     host=self.conf.host)
         LOG.debug(_LI("Received port details".format(len(neutron_ports))))
 
     def loop_count_and_wait(self, elapsed):
@@ -344,8 +329,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 if port_desc.connected_since:
                     now = now or timeutils.utcnow()
                     stats.timing('networking_dvs.ports.bound', now - port_desc.connected_since)
-                if port_desc.firewall_end:
-                    stats.timing('networking_dvs.ports.reassigned', port_desc.firewall_end)
 
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
@@ -365,10 +348,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             for port_id in deleted_ports:
                 self.known_ports.pop(port_id, None)
                 self.unbound_ports.pop(port_id, None)
-            # Security group rules are how handled on a dvportgroup level and we don't
-            # want to race against ourselves so removal is done synchronously.
-            if self.sg_agent:
-                self.sg_agent.remove_devices_filter(deleted_ports)
 
         # If the segmentation id, or the port status changed, it will land in the updated_ports
         updated_ports = self.updated_ports.copy()
@@ -427,21 +406,32 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 dict_merge(known_port, updated_port)
             self.updated_ports.pop(port_id, None)
 
-        # update firewall agent
-        if self.sg_agent:
-            # Needs to called, even if there is no added or updated ports, as it also executes the deferred updates
-            added_ports -= six.viewkeys(self.unbound_ports)
-            updated_ports = six.viewkeys(updated_ports) - added_ports
-            now = timeutils.utcnow()
-            _touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in added_ports], now)
-            _touch_fw_timestamp([self.api.uuid_port_map[port_id] for port_id in updated_ports], now)
-            self.sg_agent.setup_port_filters(added_ports, updated_ports)
+        added_ports -= six.viewkeys(self.unbound_ports)
+        updated_ports = six.viewkeys(updated_ports) - added_ports
+
+        self._reassign_ports(added_ports | updated_ports)
 
         # Apply the changes
         for dvs in six.itervalues(self.api.uuid_dvs_map):
             dvs.apply_queued_update_specs()
 
         LOG.debug("Left")
+
+    def _reassign_ports(self, port_ids):
+        for port_id in port_ids:
+            port = self.api.uuid_port_map.get(port_id)
+            if not port:
+                LOG.warn("Could not find port with id %s", port_id)
+
+            dvs, port_group = self._get_or_create_port_group(port)
+            if not dvs or not port_group:
+                continue
+            port_desc = port['port_desc']
+            if port_desc.port_group_key != port_group.key:
+                # Configure the backing to the required dvportgroup
+                old_task = port.get('task')
+                # Delay the sync in case we have
+                port['task'] = eventlet.spawn_after(0.25, self._reassign_port_async, port, old_task)
 
     def _get_or_create_port_group(self, port):
         port_id = port['id']
@@ -467,6 +457,55 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         port_group = dvs.create_dvportgroup(port_group_name, port_config, description=sg_set, update=False)
         return dvs, port_group
+
+    def _reassign_port_async(self, port, task=None):
+        if task:
+            task.wait()
+
+        dvs, port_group = self._get_or_create_port_group(port)
+        if not dvs or not port_group:
+            return
+
+        port_desc = port['port_desc']
+        if port_desc.port_group_key == port_group.key:
+            return
+
+        port_connection = vim.DistributedVirtualSwitchPortConnection(
+            switchUuid=dvs.uuid, portgroupKey=port_group.key)
+        port_backing = vim.VirtualEthernetCardDistributedVirtualPortBackingInfo(
+            port=port_connection)
+        # Specify the device that we are going to edit
+        virtual_device = getattr(vim.vm.device, port_desc.device_type)(
+            key=port_desc.device_key,
+            backing=port_backing,
+            addressType='manual',
+            macAddress=port_desc.mac_address,
+        )
+        # Create an edit spec for an existing virtual device
+        virtual_device_config_spec = vim.VirtualDeviceConfigSpec(
+            operation='edit',
+            device=virtual_device,
+        )
+        # Create a config spec for applying the update to the virtual machine
+        vm_config_spec = vim.VirtualMachineConfigSpec(
+            deviceChange=[virtual_device_config_spec]
+        )
+        # Queue the update
+        vm_ref = vim.VirtualMachine(port_desc.vmobref)
+        vm_ref._stub = self.api.connection._stub
+        if CONF.AGENT.dry_run:
+            LOG.debug("Reassign: %s", vm_config_spec)
+        else:
+            task = reconfigure_vm(vm_ref, vm_config_spec)
+            wait_for_task(task)
+            # The task will complete _after_ the corresponding event been issued to the collector,
+            # so we should be here not waiting more than some fractions of a second
+            for _ in six.moves.range(10):
+                port_desc = port['port_desc']
+                if port_desc.port_group_key == port_group.key:
+                    # stats.timing('networking_dvs.ports.reassigned', port_desc.firewall_end)
+                    break
+                eventlet.sleep(0.1)
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
@@ -500,6 +539,15 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if self.pool:
             self.pool.waitall()
 
+
+@stats.timed()
+def reconfigure_vm(vm_ref, vm_config_spec):
+    try:
+        return vm_ref.ReconfigVM_Task(spec=vm_config_spec)
+    except vim.fault.VimFault as e:
+        LOG.info("Unable to reassign VM, exception is %s.", e)
+
+
 def neutron_dvs_cli():
     """
         CLI command for retrieving a port from Neutron by id;
@@ -515,8 +563,8 @@ def neutron_dvs_cli():
     profiler.setup('neutron-dvs-agent-cli', cfg.CONF.host)
     agent = DvsNeutronAgent()
     neutron_ports = agent.plugin_rpc.get_devices_details_list(agent.context, devices=[port_id],
-                                                             agent_id=agent.agent_id,
-                                                             host=agent.conf.host)
+                                                              agent_id=agent.agent_id,
+                                                              host=agent.conf.host)
 
     if neutron_ports[0].has_key('mac_address'):
         mac_addr = neutron_ports[0]['mac_address']
