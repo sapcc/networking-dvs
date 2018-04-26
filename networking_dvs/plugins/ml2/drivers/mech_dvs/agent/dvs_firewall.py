@@ -131,7 +131,7 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
                     sg_aggr.ports_to_assign.append(port)
 
                 # Prepare and apply rules to the sg_aggr
-                patched_sg_rules = sg_util._patch_sg_rules(port['security_group_rules'])
+                patched_sg_rules = sg_util.patch_sg_rules(port['security_group_rules'])
                 sg_util.apply_rules(patched_sg_rules, sg_aggr, decrement)
 
     @staticmethod

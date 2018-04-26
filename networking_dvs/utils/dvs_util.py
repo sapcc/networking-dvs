@@ -16,16 +16,17 @@
 import atexit
 import hashlib
 import itertools
-import time
 import uuid
+from collections import defaultdict
 
 import attr
 import six
-from collections import defaultdict
+import time
 from eventlet import sleep, spawn
+from oslo_concurrency.lockutils import lock
 from oslo_log import log
 from oslo_utils import timeutils
-from oslo_concurrency.lockutils import lock
+from osprofiler.profiler import trace_cls
 from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
@@ -38,7 +39,6 @@ from networking_dvs.common.util import stats, optional_attr
 from networking_dvs.utils import spec_builder as builder
 from neutron.common import utils as neutron_utils
 from neutron.i18n import _LI, _LW, _LE
-from osprofiler.profiler import trace_cls
 
 LOG = log.getLogger(__name__)
 
@@ -164,13 +164,14 @@ class DVSController(object):
         super(DVSController, self).__init__()
         self.connection = connection
         self.dvs_name = dvs_name
-        self.max_mtu = None
         self.pool = pool
         self._update_spec_queue = []
         self.ports_by_key = {}
         self._blocked_ports = set()
         self.hosts_to_rectify = {}
         self.rectify_wait = rectify_wait
+        self.port_group_added = set()
+        self.port_group_removed = set()
 
         try:
             self._dvs, self._datacenter = self._get_dvs(dvs_name, connection)
@@ -203,19 +204,23 @@ class DVSController(object):
                     return
                 sleep(1)
             to_delete = []
-            for pg in six.itervalues(self._port_groups_by_ref):
-                try:
-                    if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
-                        countdown.pop(pg.ref._moId, None)
-                    else:
-                        value = countdown[pg.ref._moId]
-                        value -= 1
-                        if value > 0:
-                            countdown[pg.ref._moId] = value
+            try:
+                for pg in six.itervalues(self._port_groups_by_ref):
+                    try:
+                        if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
+                            countdown.pop(pg.ref._moId, None)
                         else:
-                            to_delete.append(pg)
-                except vmodl.fault.ManagedObjectNotFound:
-                    to_delete.append(pg)
+                            value = countdown[pg.ref._moId]
+                            value -= 1
+                            if value > 0:
+                                countdown[pg.ref._moId] = value
+                            else:
+                                to_delete.append(pg)
+                    except vmodl.fault.ManagedObjectNotFound:
+                        to_delete.append(pg)
+            except RuntimeError:
+                # Concurrent modification
+                pass
             for pg in to_delete:
                 if quit_event.ready():
                     return
@@ -229,31 +234,32 @@ class DVSController(object):
             return self._port_groups_by_key[port_group_key]
         except KeyError:
             self._sync_port_groups()
-            return self._port_groups_by_key[port_group_key]
+            return self._port_groups_by_key.get(port_group_key)
 
-    def get_port_by_port_desc(self, port_desc):
+    def get_port_by_port_desc(self, port_desc, existing_port=None):
         if not port_desc:
             return
-        existing_port = self.ports_by_key.get(port_desc.port_key)
-        if not existing_port or existing_port['mac_address'] != port_desc.mac_address:
-            port = {
-                'mac_address': port_desc.mac_address,
-                'port_desc': port_desc,
-                'binding:vif_details': {
-                    'dvs_port_key': port_desc.port_key,
-                    'dvs_uuid': port_desc.dvs_uuid,
-                }
-            }
-            self.ports_by_key[port_desc.port_key] = port
 
-            pg = self._port_groups_by_key.get(port_desc.port_key)
-            if pg:
-                pg.ports[port_desc.mac_address] = port
-
-            return port
+        if not existing_port:  # The neutron port was moved to another dvs port
+            port = {'mac_address': port_desc.mac_address,
+                    'port_desc': port_desc
+                    }
         else:
-            existing_port['port_desc'] = port_desc
-            return existing_port
+            port = existing_port
+
+        # assert('port_desc' not in port or port['port_desc'] == port_desc or )
+        port['port_desc'] = port_desc
+        port['binding:vif_details'] = {'dvs_port_key': port_desc.port_key,
+                                       'dvs_uuid': port_desc.dvs_uuid,
+                                       }
+
+        self.ports_by_key[port_desc.port_key] = port
+
+        pg = self._port_groups_by_key.get(port_desc.port_group_key)
+        if pg:
+            pg.ports[port_desc.mac_address] = port
+
+        return port
 
     def remove_port_by_port_desc(self, port_desc):
         if not port_desc:
@@ -279,7 +285,7 @@ class DVSController(object):
             pg_update_task = self._dvs.ReconfigureDvs_Task(spec=pg_config_info)
 
             wait_for_task(pg_update_task, si=self.connection)
-            self.max_mtu = max_mtu
+            self._max_mtu = max_mtu
         except vim.fault.VimFault as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
@@ -315,7 +321,11 @@ class DVSController(object):
         self._port_groups_by_ref[pg.ref._moId] = pg
         self._port_groups_by_key[pg.key] = pg
         if pg.name:
+            old_pg = self._port_groups_by_name.get(pg.name)
             self._port_groups_by_name[pg.name] = pg
+            if pg != old_pg:
+                for listener in self.port_group_added:
+                    listener(self, pg)
 
     def _remove_port_group(self, pg):
         if not pg:
@@ -324,12 +334,15 @@ class DVSController(object):
         self._port_groups_by_key.pop(pg.key, None)
         self._port_groups_by_name.pop(pg.name, None)
 
+        for listener in self.port_group_removed:
+            listener(self, pg)
+
     def update_network(self, network, original=None):
         original_name = self._get_net_name(self.dvs_name, original) if original else None
         current_name = self._get_net_name(self.dvs_name, network)
         blocked = not network['admin_state_up']
         try:
-            pg = self._get_pg_by_name(original_name or current_name)
+            pg = self.get_portgroup_by_name(original_name or current_name)
             pg_config_info = self._get_config_by_ref(pg.ref)
 
             if (pg_config_info.defaultPortConfig.blocked.value != blocked or
@@ -352,7 +365,7 @@ class DVSController(object):
     def delete_network(self, network):
         name = self._get_net_name(self.dvs_name, network)
         try:
-            pg = self._get_pg_by_name(name)
+            pg = self.get_portgroup_by_name(name)
         except exceptions.PortGroupNotFound:
             LOG.debug('Network %s is not present in vcenter. '
                       'Nothing to delete.' % name)
@@ -374,7 +387,7 @@ class DVSController(object):
                 return False
             else:
                 raise exceptions.wrap_wmvare_vim_exception(e)
-        except vim.fault.ManagedObjectNotFound:
+        except vmodl.fault.ManagedObjectNotFound:
             self._remove_port_group(pg)
             return True
         except vim.fault.VimFault as e:
@@ -432,13 +445,16 @@ class DVSController(object):
         if not update_specs:
             return
 
-        ports_by_portgroup = defaultdict(list)
-        for spec in update_specs:
-            ports_by_portgroup[self.get_port_group_for_port(self.ports_by_key[spec.key])].append(spec)
+        ports_by_port_group = defaultdict(list)
+        for update_spec in update_specs:
+            port_group = self.get_port_group_for_port(self.ports_by_key[update_spec.key])
+            ports_by_port_group[port_group].append(update_spec)
 
-        for port_group, pg_update_specs in six.iteritems(ports_by_portgroup):
-            old_task = port_group.task
-            port_group.task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
+        for port_group, pg_update_specs in six.iteritems(ports_by_port_group):
+            old_task = port_group.task if port_group else None
+            task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
+            if port_group:
+                port_group.task = task
 
     def _apply_queued_update_specs(self, update_specs, callbacks, retries=5, sync=None):
         if not update_specs:
@@ -612,7 +628,7 @@ class DVSController(object):
                                                                        options=options)
 
     @stats.timed()
-    def create_dvportgroup(self, sg_set, port_config, update=True):
+    def create_dvportgroup(self, name, port_config, description=None, update=True):
         """
         Creates an automatically-named dvportgroup on the dvswitch
         with the specified sg rules and marks it as such through the description
@@ -629,9 +645,7 @@ class DVSController(object):
         # which seems to be part of a non-used call path
         # starting from the dvs_agent_rpc_api. TODO - remove it
 
-        dvpg_name = dvportgroup_name(self.uuid, sg_set)
-
-        existing = self._port_groups_by_name.get(dvpg_name)
+        existing = self._port_groups_by_name.get(name)
 
         if existing:
             if update:
@@ -643,10 +657,10 @@ class DVSController(object):
 
         try:
             pg_spec = builder.pg_config(port_config)
-            pg_spec.name = dvpg_name
+            pg_spec.name = name
             pg_spec.numPorts = CONF.DVS.default_initial_num_ports
             pg_spec.type = 'earlyBinding'
-            pg_spec.description = sg_set
+            pg_spec.description = description
 
             now = timeutils.utcnow()
             pg_create_task = self._dvs.CreateDVPortgroup_Task(spec=pg_spec)
@@ -657,29 +671,29 @@ class DVSController(object):
             props = util.get_object_properties_dict(self.connection, pg_ref, ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
-            LOG.debug("Creating portgroup {} took {} seconds.".format(dvpg_name, delta.seconds))
+            LOG.debug("Creating portgroup {} took {} seconds.".format(name, delta.seconds))
 
             pg = PortGroup(
-                key=props["key"],
+                key=props['key'],
                 ref=pg_ref,
-                name=dvpg_name,
+                name=name,
                 config_version=0,
-                description=sg_set,
+                description=description,
                 default_port_config=port_config
             )
             self._store_port_group(pg)
             return pg
         except vim.fault.DuplicateName:
-            LOG.info("Untagged portgroup with matching name {} found, will update and use.".format(dvpg_name))
+            LOG.info("Untagged port-group with matching name {} found, will update and use.".format(name))
 
-            if dvpg_name not in self._port_groups_by_name:
+            if name not in self._port_groups_by_name:
                 self._sync_port_groups()
 
-            if dvpg_name not in self._port_groups_by_name:
-                LOG.error("Portgroup with matching name {} not found while expected.".format(dvpg_name))
+            if name not in self._port_groups_by_name:
+                LOG.error("Port-group with matching name {} not found while expected.".format(name))
                 return
 
-            existing = self._port_groups_by_name[dvpg_name]
+            existing = self._port_groups_by_name[name]
 
             if update:
                 self.update_dvportgroup(existing, port_config)
@@ -930,7 +944,7 @@ class DVSController(object):
                 if isinstance(obj.obj, vim.Datacenter):
                     return obj.obj
 
-    def _get_pg_by_name(self, pg_name, refresh_if_missing=True):
+    def get_portgroup_by_name(self, pg_name, refresh_if_missing=True):
         """Get the dpg ref by name"""
         try:
             return self._port_groups_by_name[pg_name]
@@ -946,7 +960,7 @@ class DVSController(object):
 
     def _get_or_create_pg(self, pg_name, network, segment):
         try:
-            return self._get_pg_by_name(pg_name)
+            return self.get_portgroup_by_name(pg_name)
         except exceptions.PortGroupNotFound:
             LOG.debug(_LI('Network %s is not present in vcenter. '
                           'Perform network creation' % pg_name))
@@ -972,7 +986,7 @@ class DVSController(object):
         return [obj for obj in results if isinstance(obj, type_value)]
 
     def _get_ports_for_pg(self, pg_name):
-        pg = self._get_pg_by_name(pg_name)
+        pg = self.get_portgroup_by_name(pg_name)
         return util.get_object_property(self.connection, pg.ref, 'portKeys')[0]
 
     def _get_free_pg_keys(self, port_group):
@@ -1015,12 +1029,12 @@ class DVSController(object):
         criteria = builder.port_criteria(port_key=port_key)
         port_info = self._dvs.FetchDVPorts(criteria=criteria)
 
-        if not port_info:
-            raise exceptions.PortNotFound(id=port_key)
-
         if getattr(port_key, '__iter__', None):
             return port_info
         else:
+            if not port_info:
+                raise exceptions.PortNotFound(id=port_key)
+
             return port_info[0]
 
     def _get_port_info_by_name(self, name, port_list=None):

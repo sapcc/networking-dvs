@@ -382,7 +382,7 @@ def _create_rule(rule_info, ip=None, name=None):
     return rule
 
 
-def _patch_sg_rules(security_group_rules):
+def patch_sg_rules(security_group_rules):
     patched_rules = []
 
     for rule in security_group_rules:
@@ -520,8 +520,12 @@ def _consolidate_ipv4_6(rules):
             yield Rule(**items)
 
 
+def consolidate_rules(rules):
+    return sorted(_consolidate_ipv4_6(_consolidate_rules(rules)))
+
+
 def get_rules(sg_aggr):
     """
     Returns a list of the rules stored in a security group aggregate
     """
-    return sorted(_consolidate_ipv4_6(_consolidate_rules(six.iterkeys(sg_aggr.rules))))
+    return consolidate_rules(six.iterkeys(sg_aggr.rules))

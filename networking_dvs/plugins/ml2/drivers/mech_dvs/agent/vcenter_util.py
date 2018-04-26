@@ -30,6 +30,7 @@ from collections import defaultdict
 
 from neutron.i18n import _LI, _LW, _LE
 from neutron.db import models_v2
+from neutron.db import securitygroups_db as sg_db
 from neutron.plugins.ml2 import models as models_ml2
 import neutron.context
 
@@ -40,12 +41,12 @@ from oslo_utils import timeutils
 from pyVmomi import vim, vmodl
 from sqlalchemy.sql import select
 from oslo_db.sqlalchemy import enginefacade
-from oslo_db.sqlalchemy.utils import get_table
 from osprofiler.profiler import trace_cls
 
 from httplib import BadStatusLine
 from networking_dvs.common import config as dvs_config, util as c_util, constants
 from networking_dvs.utils import dvs_util, spec_builder as builder, security_group_utils as sg_util
+from networking_dvs.common.db import string_agg
 
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
@@ -83,7 +84,7 @@ def get_cluster_ref_by_name(connection, cluster_name):
 @attr.s(**constants.ATTR_ARGS)
 class _DVSPortDesc(object):
     dvs_uuid = attr.ib(convert=str, cmp=True, hash=True)
-    port_key = attr.ib(convert=str, cmp=True, hash=True) # It is an int, but the WDSL defines it as a string
+    port_key = attr.ib(convert=str, cmp=True, hash=True)  # It is an int, but the WDSL defines it as a string
     port_group_key = attr.ib(convert=str)
     mac_address = attr.ib(convert=str, cmp=True, hash=True)
     connection_cookie = attr.ib(convert=str)  # Same as with port_key, int which is represented as a string
@@ -106,7 +107,6 @@ class _DVSPortDesc(object):
         values.update(
             # switchUuid in connection, dvsUuid in port
             dvs_uuid=_cast(getattr(port, 'switchUuid', None) or getattr(port, 'dvsUuid', None)),
-            # switchUuid in connection, dvsUuid in port
             # portKey in connection, key in port
             port_key=_cast(getattr(port, 'portKey', None) or getattr(port, 'key', None)),
             port_group_key=_cast(port.portgroupKey),
@@ -291,41 +291,42 @@ class VCenterMonitor(object):
             change_val = getattr(change, "val", None)
             if not change_val:
                 LOG.debug("Change name {} has no value.".format(change_name))
-            if change_name == "config.hardware.device":
-                if "assign" == change.op:
+            if change_name == 'config.hardware.device':
+                if 'assign' == change.op:
                     for v in change_val:
                         port_desc = self._port_desc_from_nic_change(vmobref, v)
                         if port_desc:
                             vm_hw[port_desc.device_key] = port_desc
                             self._handle_port_update(port_desc, now)
-                elif "indirectRemove" == change.op:
+                elif 'indirectRemove' == change.op:
                     self._handle_removal(vmobref)
-            elif change_name.startswith("config.hardware.device["):
-                id_end = change_name.index("]")
+            elif change_name.startswith('config.hardware.device['):
+                id_end = change_name.index(']')
                 device_key = int(change_name[23:id_end])
-                if "remove" == change.op:
+                if 'remove' == change.op:
                     vm_hw.pop(device_key, None)
                     continue
                 # assume that change.op is assign
                 port_desc = vm_hw.get(device_key, None)
                 if port_desc:
                     attribute = change_name[id_end + 2:]
-                    if "connectable.connected" == attribute:
+                    if 'connectable.connected' == attribute:
                         port_desc.connected = change_val
                         self._handle_port_update(port_desc, now)
-                    elif "connectable.status" == attribute:
+                    elif 'connectable.status' == attribute:
                         port_desc.status = change_val
                         self._handle_port_update(port_desc, now)
-                    elif "macAddress" == attribute:
+                    elif 'macAddress' == attribute:
                         port_desc.mac_address = str(change_val)
-                    elif "backing.port.connectionCookie" == attribute:
+                    elif 'backing.port.connectionCookie' == attribute:
                         port_desc.connection_cookie = str(change_val)
                         self._handle_port_update(port_desc, now)
-                    elif "backing.port.portKey" == attribute:
+                    elif 'backing.port.portKey' == attribute:
                         port_desc.port_key = str(change_val)
                         self._handle_port_update(port_desc, now)
-                    elif "backing.port.portgroupKey" == attribute:
-                        port_desc.port_group_key = str(change_val)
+                    elif 'backing.port.portgroupKey' == attribute:
+                        change_val = str(change_val)
+                        port_desc.port_group_key = change_val
                         # An update on the portgroup keys means
                         # that the virtual machine got reassigned
                         # to a different distributed virtual portgroup,
@@ -333,6 +334,7 @@ class VCenterMonitor(object):
                         if port_desc.firewall_start:
                             port_desc.firewall_end = timeutils.utcnow() - port_desc.firewall_start
                             LOG.debug("Port reassigned in %d seconds.", port_desc.firewall_end.seconds)
+                        self._handle_port_update(port_desc, now)
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref, change_val)
                     if port_desc:
@@ -422,7 +424,7 @@ class VCenter(object):
         self.queue = Queue(None)
 
         self.uuid_port_map = {}
-        self.mac_port_map = {}
+        self.mac_port_map = {}  # Needed to keep the same port object across port-group moves
 
         self.uuid_dvs_map = {}
         self.network_dvs_map = {}
@@ -464,7 +466,7 @@ class VCenter(object):
             eventlet.spawn_n(self._vcenter_port_changes, changes)
 
     def _vcenter_port_changes(self, changed):
-        ports_by_mac = defaultdict(dict)
+        ports_by_mac = dict()
 
         for port_desc in changed:
             dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
@@ -473,11 +475,14 @@ class VCenter(object):
                 continue
 
             if port_desc.status != 'deleted':
-                port = dvs.get_port_by_port_desc(port_desc)
+                existing_port = self.mac_port_map.get(port_desc.mac_address)
+                port = dvs.get_port_by_port_desc(port_desc, existing_port)
                 ports_by_mac[port_desc.mac_address] = port
+                self.mac_port_map[port_desc.mac_address] = port
             else:
                 dvs.remove_port_by_port_desc(port_desc)
                 ports_by_mac.pop(port_desc.mac_address, None)
+                self.mac_port_map.pop(port_desc.mac_address, None)
 
         macs = set(six.iterkeys(ports_by_mac))
         if not macs:  # Maybe all the ports have been deleted
@@ -489,15 +494,23 @@ class VCenter(object):
         # We might skip getting objects from the db here, if they are already present
         port_list = []
 
+        for mac, port in six.iteritems(ports_by_mac):
+            if 'port_id' in port:
+                port_list.append(port)
+                macs.discard(mac)
+
         context = neutron.context.get_admin_context()
         for neutron_info in self._get_ports_by_mac(context, macs):
             mac_address = neutron_info['mac_address']
             port_id = neutron_info['port_id']
             macs.discard(mac_address)
-            port_info = ports_by_mac[mac_address]
-            c_util.dict_merge(port_info, neutron_info)
-            self.uuid_port_map[port_id] = port_info
-            port_list.append(port_info)
+            port_info = ports_by_mac.get(mac_address)
+            if port_info:
+                c_util.dict_merge(port_info, neutron_info)
+                self.uuid_port_map[port_id] = port_info
+                port_list.append(port_info)
+            else:
+                LOG.warn("Missing port %s for port_info %s", port_id, mac_address)
 
         if macs:
             LOG.warning(_LW("Could not find the following macs: %s"), macs)
@@ -527,7 +540,8 @@ class VCenter(object):
     def port_by_switch(self, ports):
         by_switch = defaultdict(list)
         for port in ports:
-            by_switch[self.get_dvs_by_uuid(port['port_desc'].dvs_uuid)].append(port)
+            dvs = self.get_dvs_by_uuid(port['port_desc'].dvs_uuid)
+            by_switch[dvs].append(port)
 
         return six.iteritems(by_switch)
 
@@ -576,26 +590,19 @@ class VCenter(object):
             raise Exception('DVS port not found!')
 
     def get_new_ports(self, block=False, timeout=1.0, max_ports=None):
-        ports_by_mac = defaultdict(dict)
+        ports_by_mac = dict()
         try:
             while max_ports is None or len(ports_by_mac) < max_ports:
                 new_port = self.queue.get(block=block, timeout=timeout)
                 port_desc = new_port['port_desc']
                 block = False  # Only block on the first item
-                if port_desc.status == 'deleted':
-                    ports_by_mac.pop(port_desc.mac_address, None)
-                    dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-                    dvs.ports_by_key.pop(port_desc.port_key, None)
-                    port = self.mac_port_map.pop(port_desc.mac_address, None)
-                    if port:
-                        self.uuid_port_map.pop(port['id'], None)
+                if port_desc.status != 'deleted':
+                    ports_by_mac[port_desc.mac_address] = new_port
+                    new_port_id = new_port.get('id')
+                    if new_port_id:
+                        self.uuid_port_map[new_port_id] = new_port
                 else:
-                    port = self.mac_port_map.get(port_desc.mac_address, {})
-                    port.update(dict(new_port))
-                    ports_by_mac[port_desc.mac_address] = port
-                    dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
-                    if dvs:
-                        dvs.ports_by_key[port_desc.port_key] = port
+                    ports_by_mac.pop(port_desc.mac_address, None)
         except Empty:
             pass
         return ports_by_mac
@@ -621,28 +628,30 @@ class VCenter(object):
         for port_id, tenant_id, mac, status, admin_state_up, \
                 network_id, network_type, physical_network, segmentation_id in results:
             ports[port_id] = {
-                "port_id": port_id,
-                "id": port_id,
-                "device": port_id,
-                "mac_address": mac,
-                "tenant_id": tenant_id,
-                "admin_state_up": admin_state_up,
-                "status": status,
-                "network_id": network_id,
-                "network_type": network_type,
-                "segmentation_id": segmentation_id,
-                "physical_network": physical_network,
-                "security_groups": []
+                'port_id': port_id,
+                'id': port_id,
+                'device': port_id,
+                'mac_address': mac,
+                'tenant_id': tenant_id,
+                'admin_state_up': admin_state_up,
+                'status': status,
+                'network_id': network_id,
+                'network_type': network_type,
+                'segmentation_id': segmentation_id,
+                'physical_network': physical_network,
+                'security_groups': [],
+                'task': None,
             }
         if not ports:
             return []
 
-        # This can be moved to the query with sqlalchemy 1.1
-        # http://docs.sqlalchemy.org/en/latest/core/functions.html#sqlalchemy.sql.functions.array_agg
-        sgpb = get_table(context.session.get_bind(), 'securitygroupportbindings')
-        for port_id, security_group_id in context.session.execute(
-                select([sgpb.c.port_id, sgpb.c.security_group_id], sgpb.c.port_id.in_(six.iterkeys(ports)))):
-            ports[port_id]["security_groups"].append(security_group_id)
+        sgpb = sg_db.SecurityGroupPortBinding
+        separator = ','
+        for port_id, security_group_ids in context.session.query(
+                sgpb.port_id,
+                string_agg(sgpb.security_group_id, separator, sgpb.security_group_id)).\
+                filter(sgpb.port_id.in_(six.iterkeys(ports))).group_by(sgpb.port_id):
+            ports[port_id]['security_groups'] = security_group_ids.split(separator)
 
         return ports.values()
 

@@ -41,11 +41,13 @@ from neutron.i18n import _LI, _LW, _LE
 from neutron.api.rpc.handlers import securitygroups_rpc
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
+from networking_dvs.utils.dvs_util import dvportgroup_name
 from networking_dvs.api import dvs_agent_rpc_api
 from networking_dvs.common import constants as dvs_const, config
 from networking_dvs.plugins.ml2.drivers.mech_dvs.agent import vcenter_util
-from networking_dvs.common.util import stats
+from networking_dvs.common.util import stats, dict_merge
 from networking_dvs.utils import dvs_util, security_group_utils as sg_util, spec_builder as builder
+
 from pyVmomi import vim
 
 LOG = logging.getLogger(__name__)
@@ -86,6 +88,10 @@ def _touch_fw_timestamp(ports, now=None):
 class DVSPluginApi(agent_rpc.PluginApi):
     pass
 
+
+##
+# The SecurityGroupAgentRpcCallbackMixin will forward all
+# security group rpc calls to self.sg_agent
 
 @trace_cls("rpc", trace_private=True)
 class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
@@ -129,6 +135,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         self.api = vcenter_util.VCenter(self.conf.ML2_VMWARE, pool=self.pool, agent=self)
 
+        for network, dvs in six.iteritems(self.api.network_dvs_map):
+            network_maps_v2[network] = dvs.uuid.replace(" ", "")
+
         # Security group agent support
         if self.enable_security_groups:
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
@@ -137,9 +146,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                                         integration_bridge=self.api,  # Passed on to FireWall Driver
                                                         defer_refresh_firewall=True)  # Can only be false, if ...
             # ... we keep track of all the security groups of a port, and probably more changes
-
-        for network, dvs in six.iteritems(self.api.network_dvs_map):
-            network_maps_v2[network] = dvs.uuid.replace(" ", "")
 
         self.run_daemon_loop = True
         self.iter_num = 0
@@ -159,12 +165,12 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.connection.consume_in_threads()
 
     def book_port(self, port, network_segments, network_current):
-        # LOG.debug("{} {} {}".format(port["id"], port["mac_address"], network_segments))
+        # LOG.debug("{} {}".format(port, network_segments))
 
         dvs = None
         dvs_segment = None
         for segment in network_segments:
-            physical_network = segment["physical_network"]
+            physical_network = segment['physical_network']
             dvs = self.api.network_dvs_map.get(physical_network, None)
             if dvs:
                 dvs_segment = segment
@@ -173,36 +179,34 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if not dvs:
             return {}
 
+        self.mtu_update(dvs, network_current)
+
         sg_set = sg_util.security_group_set(port)
         if not sg_set:
             return {}
 
-        self.max_mtu = dvs.mtu
-        self.mtu_update(network_current['mtu'], self.max_mtu, dvs, network_current)
+        port['segmentation_id'] = dvs_segment['segmentation_id']
+        port['physical_network'] = dvs_segment['physical_network']
+        dvs, port_group = self._get_or_create_port_group(port)
 
-        port_config = vim.VMwareDVSPortSetting(
-            vlan=builder.vlan(dvs_segment['segmentation_id']),
-            filterPolicy=builder.filter_policy(None)
-        )
-
-        pg = dvs.create_dvportgroup(sg_set, port_config, update=False)
-
-        if not pg:
-            LOG.warning("Failed to create port-group")
+        if not port_group:
+            LOG.warning('Failed to create port-group')
             return {}
 
-        return {"bridge_name": pg.name}
+        return {'bridge_name': port_group.name}
 
-    def mtu_update(self, network_mtu, dvs_mtu, dvs, network_current):
-        if network_mtu is not None and dvs_mtu is not None:
-            if int(network_mtu) > int(dvs_mtu):
-                LOG.warning('Network: %s has MTU of %s which is bigger than the DVS MTU.', network_current['name'], network_current['mtu'])
-                LOG.info("Updating DVS mtu...")
+    @staticmethod
+    def mtu_update(dvs, network_current):
+        if network_current.get('mtu') is not None and dvs.mtu is not None:
+            network_mtu = network_current.get('mtu')
+            if int(network_mtu) > int(dvs.mtu):
+                LOG.warning("Network: %s has MTU of %s which is bigger than the DVS MTU.", network_current['name'],
+                            network_mtu)
+                LOG.info('Updating DVS mtu...')
                 dvs.update_mtu(network_mtu)
 
-    def port_update(self, context, **kwargs):
+    def port_update(self, context, port=None, network_type=None, physical_network=None, segmentation_id=None):
         # LOG.info("port_update message {}".format(kwargs))
-        port = kwargs.get('port')
         port_id = port['id']
         # Avoid updating a port, which has not been created yet
         if port_id in self.known_ports and not port_id in self.deleted_ports:
@@ -327,14 +331,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                     LOG.debug("Port with key {} has already been removed.".format(port_key))
                     continue
 
-                port_id = port["port_id"]
+                port_id = port.get('port_id') or port.get('id')
                 self.unbound_ports.pop(port_id, None)
-                if port["admin_state_up"]:
+                if port.get('admin_state_up', True):
                     port_up_ids.append(port_id)
                 else:
                     port_down_ids.append(port_id)
 
-                port_desc = port.get('port_desc',)
+                port_desc = port.get('port_desc')
                 if not port_desc:
                     continue
                 if port_desc.connected_since:
@@ -399,13 +403,13 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 self.unbound_ports.pop(port_id, None)
 
         if ports_to_bind:
-            LOG.debug("Ports to bind: {}".format([port["port_id"] for port in ports_to_bind]))
+            LOG.debug("Ports to bind: {}".format([port['port_id'] for port in ports_to_bind]))
             self.api.bind_ports(ports_to_bind, callback=self._bound_ports)
 
         added_ports = set()
         known_ids = six.viewkeys(self.known_ports)
         for port in found_ports:
-            port_id = port.get("port_id")
+            port_id = port.get('port_id') or port.get('id')
             if not port_id:
                 continue
             if port_id not in known_ids:
@@ -417,8 +421,11 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                     self.known_ports[port_id] = port
                     updated_ports[port_id] = port
 
-        for port in six.iterkeys(updated_ports):
-            self.updated_ports.pop(port, None)
+        for port_id, updated_port in six.iteritems(updated_ports):
+            known_port = self.known_ports.get(port_id)
+            if known_port:
+                dict_merge(known_port, updated_port)
+            self.updated_ports.pop(port_id, None)
 
         # update firewall agent
         if self.sg_agent:
@@ -435,6 +442,31 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             dvs.apply_queued_update_specs()
 
         LOG.debug("Left")
+
+    def _get_or_create_port_group(self, port):
+        port_id = port['id']
+        physical_network = port['physical_network']
+        dvs = self.api.network_dvs_map.get(physical_network, None)
+        if not dvs:
+            LOG.warn("Cannot find dvs for physical network %s on port %s", physical_network, port_id)
+            return None, None
+
+        sg_set = sg_util.security_group_set(port)
+        if not sg_set:
+            LOG.warning("No security groups for port %s", port_id)
+            port_group_name = physical_network
+        else:
+            port_group_name = dvportgroup_name(dvs.uuid, sg_set)
+
+        segmentation_id = port['segmentation_id']
+
+        port_config = vim.VMwareDVSPortSetting(
+            vlan=builder.vlan(segmentation_id),
+            filterPolicy=builder.filter_policy(None)
+        )
+
+        port_group = dvs.create_dvportgroup(port_group_name, port_config, description=sg_set, update=False)
+        return dvs, port_group
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
@@ -495,7 +527,7 @@ def neutron_dvs_cli():
     sg_info = sg_api.security_group_info_for_devices(agent.context, [neutron_ports[0]['port_id']])
 
     rules = sg_api.security_group_rules_for_devices(agent.context, [port_id])
-    patched_sg_rules = sg_util._patch_sg_rules(rules[port_id]['security_group_rules'])
+    patched_sg_rules = sg_util.patch_sg_rules(rules[port_id]['security_group_rules'])
 
     sg_set = sg_util.security_group_set(sg_info)
 
@@ -529,7 +561,7 @@ def neutron_dvs_cli():
         if config_match:
             match = True
             print("Neutron Port configuration rule not matched for : ", neutron_port_rules[i])
-            print("DVS Port configuraiton rule: ", dvs_port_rules[i])
+            print("DVS Port configuration rule: ", dvs_port_rules[i])
 
     if match is False:
         print("Neutron port config matches DVS port config")

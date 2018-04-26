@@ -65,7 +65,7 @@ dvs_opts = [
                default=0,
                help=_("Create a profile trace for every nth iteration (if profiling is enabled)")),
     cfg.IntOpt('max_ports_per_iteration',
-               default=5,
+               default=50,
                help=_("Number of ports to get per iteration")),
     cfg.IntOpt('default_initial_num_ports',
                default=2,
