@@ -681,7 +681,7 @@ class VCenter(object):
         if not mac_addresses:
             return []
 
-        return self._query_ports(context, filter=models_v2.Port.mac_address.in_(mac_addresses))
+        return self._query_ports(context, constraint=models_v2.Port.mac_address.in_(mac_addresses))
 
     def _get_agent_ports(self, context):
         return self._query_ports(context)
