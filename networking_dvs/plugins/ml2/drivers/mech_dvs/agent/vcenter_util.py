@@ -39,7 +39,6 @@ from oslo_utils.timeutils import utcnow
 from oslo_service import loopingcall
 from oslo_utils import timeutils
 from pyVmomi import vim, vmodl
-from sqlalchemy.sql import select
 from oslo_db.sqlalchemy import enginefacade
 from osprofiler.profiler import trace_cls
 
@@ -51,6 +50,7 @@ from networking_dvs.common.db import string_agg
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
+_DB_AGG_SEPARATOR = ','
 
 def _create_session(config):
     """Create Vcenter Session for API Calling."""
@@ -623,11 +623,12 @@ class VCenter(object):
         LOG.debug("Read all ports")
 
     @staticmethod
-    def _query_results_to_ports(context, results):
-        ports = {}
+    def _query_results_to_ports(results):
+        ports = []
         for port_id, tenant_id, mac, status, admin_state_up, \
-                network_id, network_type, physical_network, segmentation_id in results:
-            ports[port_id] = {
+                network_id, network_type, physical_network, segmentation_id, \
+                security_group_ids in results:
+            ports.append({
                 'port_id': port_id,
                 'id': port_id,
                 'device': port_id,
@@ -639,51 +640,51 @@ class VCenter(object):
                 'network_type': network_type,
                 'segmentation_id': segmentation_id,
                 'physical_network': physical_network,
-                'security_groups': [],
+                'security_groups': security_group_ids.split(_DB_AGG_SEPARATOR),
                 'task': None,
-            }
-        if not ports:
-            return []
+            })
 
+        return ports
+
+    @enginefacade.reader
+    def _query_ports(self, context, constraint=None):
         sgpb = sg_db.SecurityGroupPortBinding
-        separator = ','
-        for port_id, security_group_ids in context.session.query(
-                sgpb.port_id,
-                string_agg(sgpb.security_group_id, separator, sgpb.security_group_id)).\
-                filter(sgpb.port_id.in_(six.iterkeys(ports))).group_by(sgpb.port_id):
-            ports[port_id]['security_groups'] = security_group_ids.split(separator)
 
-        return ports.values()
+        columns = [
+            models_v2.Port.id,
+            models_v2.Port.tenant_id,
+            models_v2.Port.mac_address,
+            models_v2.Port.status,
+            models_v2.Port.admin_state_up,
+            models_ml2.NetworkSegment.network_id,
+            models_ml2.NetworkSegment.network_type,
+            models_ml2.NetworkSegment.physical_network,
+            models_ml2.NetworkSegment.segmentation_id]
 
-    def _build_port_query(self, context):
-        return context.session.query(models_v2.Port.id,
-                                 models_v2.Port.tenant_id,
-                                 models_v2.Port.mac_address,
-                                 models_v2.Port.status,
-                                 models_v2.Port.admin_state_up,
-                                 models_ml2.NetworkSegment.network_id,
-                                 models_ml2.NetworkSegment.network_type,
-                                 models_ml2.NetworkSegment.physical_network,
-                                 models_ml2.NetworkSegment.segmentation_id,
-                             ).\
+        query = context.session.query(*columns).\
+                    add_column(string_agg(sgpb.security_group_id, _DB_AGG_SEPARATOR, sgpb.security_group_id)).\
                  join(models_ml2.PortBindingLevel, models_v2.Port.id == models_ml2.PortBindingLevel.port_id).\
                  join(models_ml2.NetworkSegment, models_ml2.PortBindingLevel.segment_id == models_ml2.NetworkSegment.id).\
+                 join(sg_db.SecurityGroupPortBinding, models_v2.Port.id == sg_db.SecurityGroupPortBinding.port_id).\
                  filter(models_ml2.PortBindingLevel.host == self.agent.conf.host,
                         models_ml2.PortBindingLevel.driver == constants.DVS,
                         )
 
-    @enginefacade.reader
+        if constraint:
+            query = query.filter(constraint)
+
+        query = query.group_by(*columns)
+
+        return self._query_results_to_ports(query)
+
     def _get_ports_by_mac(self, context, mac_addresses):
         if not mac_addresses:
             return []
 
-        return self._query_results_to_ports(context,
-                                            self._build_port_query(context).filter(models_v2.Port.mac_address.in_(mac_addresses))
-                                            )
+        return self._query_ports(context, filter=models_v2.Port.mac_address.in_(mac_addresses))
 
-    @enginefacade.reader
     def _get_agent_ports(self, context):
-        return self._query_results_to_ports(context, self._build_port_query(context))
+        return self._query_ports(context)
 
     def stop(self):
         try:

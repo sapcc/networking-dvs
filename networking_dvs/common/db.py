@@ -27,6 +27,7 @@ def compile_string_agg(element, compiler, **kwargs):
         tail = ')'
     return head + tail
 
+
 @compiles(string_agg, 'mysql')
 def compile_string_agg(element, compiler, **kwargs):
     if element.order_by is not None:
