@@ -670,7 +670,7 @@ class VCenter(object):
                         models_ml2.PortBindingLevel.driver == constants.DVS,
                         )
 
-        if constraint:
+        if constraint is not None:
             query = query.filter(constraint)
 
         query = query.group_by(*columns)
