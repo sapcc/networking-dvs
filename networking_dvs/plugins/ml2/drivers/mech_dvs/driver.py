@@ -12,12 +12,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from neutron import context
+from neutron_lib import context
 from neutron.agent import securitygroups_rpc
-from neutron.extensions import portbindings
-from neutron.i18n import _LI
+from neutron_lib.api.definitions import portbindings
+from neutron._i18n import _
 from neutron.plugins.common import constants as p_constants
-from neutron.plugins.ml2 import driver_api as api
+from neutron_lib.plugins.ml2 import api
 from neutron.plugins.ml2.drivers import mech_agent
 from oslo_log import log
 
@@ -37,7 +37,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
     """
 
     def __init__(self):
-        LOG.info(_LI("VMware DVS mechanism driver initializing..."))
+        LOG.info(_("VMware DVS mechanism driver initializing..."))
         self.agent_type = dvs_constants.AGENT_TYPE_DVS
         self.vif_type = dvs_constants.DVS
         self.version = 1
@@ -53,7 +53,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             self.vif_type,
             self.vif_details)
 
-        LOG.info(_LI("VMware DVS mechanism driver initialized..."))
+        LOG.info(_("VMware DVS mechanism driver initialized..."))
 
     def get_allowed_network_types(self, agent):
         return ([p_constants.TYPE_VLAN, p_constants.TYPE_FLAT])
@@ -91,7 +91,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if not mappings:
             return False
 
-        LOG.debug(_LI("Agent: {}, Segment: {}".format(agent, segment)))
+        LOG.debug(_("Agent: {}, Segment: {}".format(agent, segment)))
 
         bridge_name = mappings.get(segment['physical_network'], None)
 

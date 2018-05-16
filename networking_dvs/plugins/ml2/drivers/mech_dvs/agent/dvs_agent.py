@@ -33,11 +33,11 @@ from oslo_service import loopingcall
 from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 
-import neutron.context
+from neutron_lib import context as neutron_context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config, topics, constants as n_const, utils as neutron_utils
 from neutron.common import profiler
-from neutron.i18n import _LI, _LW, _LE
+from neutron._i18n import _
 from neutron.api.rpc.handlers import securitygroups_rpc
 
 from networking_dvs.agent.firewalls import dvs_securitygroup_rpc as dvs_rpc
@@ -95,7 +95,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         self.pool = eventlet.greenpool.GreenPool(size=10)  # Start small, so we identify possible bottlenecks
         self.conf = conf or CONF
-        self.context = neutron.context.get_admin_context()
+        self.context = neutron_context.get_admin_context()
 
         network_maps = neutron_utils.parse_mappings(self.conf.ML2_VMWARE.network_maps)
         network_maps_v2 = {}
@@ -252,16 +252,16 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
             self.agent_state.pop('start_flag', None)
         except (oslo_messaging.MessagingTimeout, oslo_messaging.RemoteError, oslo_messaging.MessageDeliveryFailure):
-            LOG.exception(_LE("Failed reporting state!"))
+            LOG.exception(_("Failed reporting state!"))
 
     def _check_and_handle_signal(self):
         if self.catch_sigterm:
-            LOG.info(_LI("Agent caught SIGTERM, quitting daemon loop."))
+            LOG.info(_("Agent caught SIGTERM, quitting daemon loop."))
             self.run_daemon_loop = False
             self.catch_sigterm = False
 
         if self.catch_sighup:
-            LOG.info(_LI("Agent caught SIGHUP, resetting."))
+            LOG.info(_("Agent caught SIGHUP, resetting."))
             self.conf.reload_config_files()
             common_config.setup_logging()
             LOG.debug('Full set of CONF:')
@@ -291,7 +291,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             neutron_ports = self.plugin_rpc.get_devices_details_list(self.context, devices=macs,
                                                                      agent_id=self.agent_id,
                                                                      host=self.conf.host)
-        LOG.debug(_LI("Received port details".format(len(neutron_ports))))
+        LOG.debug(_("Received port details".format(len(neutron_ports))))
 
     def loop_count_and_wait(self, elapsed):
         # sleep till end of polling interval
@@ -333,7 +333,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures', len(failed_keys))
 
-        LOG.info(_LI("_bound_ports({}, {}) ({} failures)").format(port_up_ids, port_down_ids, len(failed_keys)))
+        LOG.info(_("_bound_ports({}, {}) ({} failures)").format(port_up_ids, port_down_ids, len(failed_keys)))
 
         if port_up_ids or port_down_ids:
             self.pool.spawn(self._update_device_list, port_down_ids, port_up_ids)
@@ -363,7 +363,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             if not port.get('port_id', None):
                 # This can happen for orphaned vms (summary.runtime.connectionState == "orphaned")
                 # or vms not managed by openstack
-                LOG.warning(_LW("Missing attribute in port {}").format(port))
+                LOG.warning(_("Missing attribute in port {}").format(port))
             elif port_network_type == 'vlan' and port_segmentation_id:
                 if port_segmentation_id != port_vlan_id or \
                         port['admin_state_up'] != (port.get('status') == 'ACTIVE'):
@@ -509,7 +509,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (self.__module__, self.__class__.__name__)):
-            LOG.info(_LI("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
+            LOG.info(_("Update {} down {} agent {} host {}").format(port_up_ids, port_down_ids,
                                                                       self.agent_id, self.conf.host))
             if not CONF.AGENT.dry_run:
                 self.plugin_rpc.update_device_list(self.context, port_up_ids, port_down_ids,
@@ -639,7 +639,7 @@ def main():
         agent = DvsNeutronAgent()
         dvs_inst = agent
         # Start everything.
-        LOG.info(_LI("Agent initialized successfully, now running... "))
+        LOG.info(_("Agent initialized successfully, now running... "))
         agent.daemon_loop()
     except KeyboardInterrupt:
         pass
