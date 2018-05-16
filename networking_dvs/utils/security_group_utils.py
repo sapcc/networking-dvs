@@ -21,7 +21,7 @@ from collections import defaultdict, Counter
 import attr
 import six
 from ipaddress import ip_network, collapse_addresses, IPv4Network, IPv6Network
-from neutron.i18n import _LI
+from neutron._i18n import _
 from oslo_log import log
 from pyVmomi import vim, vmodl
 from eventlet import sleep
@@ -185,7 +185,7 @@ class TrafficRuleBuilder(object):
     def _has_port(self, min_port):
         if min_port:
             if self.protocol == 'icmp':
-                LOG.info(_LI('Vmware dvs driver does not support '
+                LOG.info(_('Vmware dvs driver does not support '
                              '"type" and "code" for ICMP protocol.'))
                 return False
             else:

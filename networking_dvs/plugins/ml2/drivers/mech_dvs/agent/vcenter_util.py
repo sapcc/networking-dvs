@@ -28,11 +28,11 @@ import six
 
 from collections import defaultdict
 
-from neutron.i18n import _LI, _LW, _LE
+from neutron._i18n import _
 from neutron.db import models_v2
 from neutron.db import securitygroups_db as sg_db
 from neutron.plugins.ml2 import models as models_ml2
-import neutron.context
+from neutron_lib import context as neutron_context
 
 from oslo_log import log
 from oslo_utils.timeutils import utcnow
@@ -183,7 +183,7 @@ class VCenterMonitor(object):
                 pass
 
     def _run(self):
-        LOG.info(_LI('Monitor running... '))
+        LOG.info(_('Monitor running... '))
 
         try:
             self.connection = self.connection or _create_session(self.config)
@@ -247,7 +247,7 @@ class VCenterMonitor(object):
         else:
             container = get_cluster_ref_by_name(connection, self.config.cluster_name)
             if not container:
-                LOG.error(_LE("Cannot find cluster with name '{}'").format(self.config.cluster_name))
+                LOG.error(_("Cannot find cluster with name '{}'").format(self.config.cluster_name))
                 exit(2)
 
         container_view = connection.content.viewManager.CreateContainerView(
@@ -429,7 +429,7 @@ class VCenter(object):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
-        context = neutron.context.get_admin_context()
+        context = neutron_context.get_admin_context()
         for port in self._get_agent_ports(context):
             physical_network = port['physical_network']
             port_id = port['id']
@@ -487,7 +487,7 @@ class VCenter(object):
                 port_list.append(port)
                 macs.discard(mac)
 
-        context = neutron.context.get_admin_context()
+        context = neutron_context.get_admin_context()
         for neutron_info in self._get_ports_by_mac(context, macs):
             mac_address = neutron_info['mac_address']
             port_id = neutron_info['port_id']
@@ -501,7 +501,7 @@ class VCenter(object):
                 LOG.warn("Missing port %s for port_info %s", port_id, mac_address)
 
         if macs:
-            LOG.warning(_LW("Could not find the following macs: %s"), macs)
+            LOG.warning(_("Could not find the following macs: %s"), macs)
 
         LOG.debug("Got port information from db for %d ports", len(port_list))
         for port in port_list:
@@ -698,7 +698,7 @@ def main():
     common_config.setup_logging()
 
     # Start everything.
-    LOG.info(_LI("Test running... "))
+    LOG.info(_("Test running... "))
 
     watch = timeutils.StopWatch()
 

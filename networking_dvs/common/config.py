@@ -1,6 +1,6 @@
 from oslo_config import cfg
 
-from neutron.agent.common import config
+from neutron.conf.agent import common
 
 DEFAULT_BRIDGE_MAPPINGS = []
 DEFAULT_VLAN_RANGES = []
@@ -75,5 +75,5 @@ dvs_opts = [
 cfg.CONF.register_opts(dvs_opts, "DVS")
 cfg.CONF.register_opts(agent_opts, "AGENT")
 cfg.CONF.register_opts(vmware_opts, "ML2_VMWARE")
-config.register_agent_state_opts_helper(cfg.CONF)
+common.register_agent_state_opts_helper(cfg.CONF)
 CONF = cfg.CONF

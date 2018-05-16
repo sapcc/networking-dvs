@@ -36,7 +36,7 @@ from networking_dvs.utils.dvs_util import dvportgroup_name
 from neutron.db import securitygroups_db as sg_db
 from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin, DIRECTION_IP_PREFIX
 from neutron.plugins.ml2.models import PortBindingLevel
-from neutron import context as neutron_context
+from neutron_lib import context as neutron_context
 
 LOG = logging.getLogger(__name__)
 

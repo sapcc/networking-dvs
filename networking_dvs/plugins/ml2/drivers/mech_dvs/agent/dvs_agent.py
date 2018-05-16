@@ -35,7 +35,9 @@ from osprofiler.profiler import trace_cls
 
 from neutron_lib import context as neutron_context
 from neutron.agent import rpc as agent_rpc, securitygroups_rpc as sg_rpc
-from neutron.common import config as common_config, topics, constants as n_const, utils as neutron_utils
+from neutron.common import config as common_config, topics
+from neutron_lib import constants as n_const
+from neutron_lib.utils import helpers
 from neutron.common import profiler
 from neutron._i18n import _
 from neutron.api.rpc.handlers import securitygroups_rpc
@@ -97,7 +99,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.conf = conf or CONF
         self.context = neutron_context.get_admin_context()
 
-        network_maps = neutron_utils.parse_mappings(self.conf.ML2_VMWARE.network_maps)
+        network_maps = helpers.parse_mappings(self.conf.ML2_VMWARE.network_maps)
         network_maps_v2 = {}
 
         self.agent_state = {

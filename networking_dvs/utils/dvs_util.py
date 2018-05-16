@@ -38,7 +38,7 @@ from networking_dvs.common import exceptions
 from networking_dvs.common.util import stats, optional_attr
 from networking_dvs.utils import spec_builder as builder
 from neutron.common import utils as neutron_utils
-from neutron.i18n import _LI, _LW, _LE
+from neutron._i18n import _
 
 LOG = log.getLogger(__name__)
 
@@ -317,7 +317,7 @@ class DVSController(object):
                 name=name,
             )
             self._store_port_group(pg)
-            LOG.info(_LI('Network %(name)s created \n%(pg_ref)s'),
+            LOG.info(_('Network %(name)s created \n%(pg_ref)s'),
                      {'name': name, 'pg_ref': pg.ref})
             return pg
 
@@ -363,7 +363,7 @@ class DVSController(object):
                 pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
 
                 wait_for_task(pg_update_task, si=self.connection)
-                LOG.info(_LI('Network %(name)s updated'),
+                LOG.info(_('Network %(name)s updated'),
                          {'name': current_name})
         except vim.fault.VimFault as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
@@ -383,12 +383,12 @@ class DVSController(object):
         try:
             pg_delete_task = pg.ref.Destroy_Task()
             wait_for_task(pg_delete_task, si=self.connection)
-            LOG.info(_LI('Network %(name)s deleted.') % {'name': pg.name})
+            LOG.info(_('Network %(name)s deleted.') % {'name': pg.name})
             self._remove_port_group(pg)
             return True
         except vim.fault.ResourceInUse as e:
             if ignore_in_use:
-                LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
+                LOG.info(_("Could not delete port-group %(name)s. Reason: %(message)s")
                          % {'name': pg.name, 'message': e.message})
                 return False
             else:
@@ -819,7 +819,7 @@ class DVSController(object):
                 except (vim.fault.VimFault,
                         exceptions.VMWareDVSException) as e:
                     if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.message:
-                        LOG.info(_LI('Concurrent modification on '
+                        LOG.info(_('Concurrent modification on '
                                      'increase port group.'))
                         continue
                     raise e
@@ -968,7 +968,7 @@ class DVSController(object):
         try:
             return self.get_portgroup_by_name(pg_name)
         except exceptions.PortGroupNotFound:
-            LOG.debug(_LI('Network %s is not present in vcenter. '
+            LOG.debug(_('Network %s is not present in vcenter. '
                           'Perform network creation' % pg_name))
             return self.create_network(network, segment)
 
@@ -1050,7 +1050,7 @@ class DVSController(object):
         if not ports:
             raise exceptions.PortNotFound(id=name)
         if len(ports) > 1:
-            LOG.warn(_LW("Multiple ports found for name %s."), name)
+            LOG.warn(_("Multiple ports found for name %s."), name)
         return ports[0]
 
     def get_ports(self, connect_flag=True):
@@ -1090,7 +1090,7 @@ def connect(config):
             if connection:
                 atexit.register(Disconnect, connection)
         except ConnectionError:
-            LOG.error(_LE("No connection to vSphere"))
+            LOG.error(_("No connection to vSphere"))
             sleep(10)
 
     return connection
