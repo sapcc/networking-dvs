@@ -637,6 +637,7 @@ class VCenter(object):
     @enginefacade.reader
     def _query_ports(self, context, constraint=None):
         sgpb = sg_db.SecurityGroupPortBinding
+        PortBindingLevel = models_ml2.PortBindingLevel
 
         columns = [
             models_v2.Port.id,
@@ -650,12 +651,14 @@ class VCenter(object):
             models_ml2.NetworkSegment.segmentation_id]
 
         query = context.session.query(*columns).\
-                    add_column(string_agg(sgpb.security_group_id, _DB_AGG_SEPARATOR, sgpb.security_group_id)).\
-                 join(models_ml2.PortBindingLevel, models_v2.Port.id == models_ml2.PortBindingLevel.port_id).\
-                 join(models_ml2.NetworkSegment, models_ml2.PortBindingLevel.segment_id == models_ml2.NetworkSegment.id).\
-                 join(sg_db.SecurityGroupPortBinding, models_v2.Port.id == sg_db.SecurityGroupPortBinding.port_id).\
-                 filter(models_ml2.PortBindingLevel.host == self.agent.conf.host,
-                        models_ml2.PortBindingLevel.driver == constants.DVS,
+                    add_column(string_agg(sgpb.security_group_id,
+                                          _DB_AGG_SEPARATOR,
+                                          sgpb.security_group_id)).\
+                 join(PortBindingLevel).\
+                 join(models_ml2.NetworkSegment).\
+                 join(sgpb).\
+                 filter(PortBindingLevel.host == self.agent.conf.host,
+                        PortBindingLevel.driver == constants.DVS,
                         )
 
         if constraint is not None:
@@ -669,7 +672,8 @@ class VCenter(object):
         if not mac_addresses:
             return []
 
-        return self._query_ports(context, constraint=models_v2.Port.mac_address.in_(mac_addresses))
+        return self._query_ports(
+            context, constraint=models_v2.Port.mac_address.in_(mac_addresses))
 
     def _get_agent_ports(self, context):
         return self._query_ports(context)
