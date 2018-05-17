@@ -30,7 +30,8 @@ from collections import defaultdict
 
 from neutron._i18n import _
 from neutron.db import models_v2
-from neutron.db import securitygroups_db as sg_db
+from neutron.db.models import securitygroup as sg_db
+from neutron.db.models import segment
 from neutron.plugins.ml2 import models as models_ml2
 from neutron_lib import context as neutron_context
 
@@ -644,15 +645,15 @@ class VCenter(object):
             models_v2.Port.mac_address,
             models_v2.Port.status,
             models_v2.Port.admin_state_up,
-            models_ml2.NetworkSegment.network_id,
-            models_ml2.NetworkSegment.network_type,
-            models_ml2.NetworkSegment.physical_network,
-            models_ml2.NetworkSegment.segmentation_id]
+            segment.NetworkSegment.network_id,
+            segment.NetworkSegment.network_type,
+            segment.NetworkSegment.physical_network,
+            segment.NetworkSegment.segmentation_id]
 
         query = context.session.query(*columns).\
                     add_column(string_agg(sgpb.security_group_id, _DB_AGG_SEPARATOR, sgpb.security_group_id)).\
                  join(models_ml2.PortBindingLevel, models_v2.Port.id == models_ml2.PortBindingLevel.port_id).\
-                 join(models_ml2.NetworkSegment, models_ml2.PortBindingLevel.segment_id == models_ml2.NetworkSegment.id).\
+                 join(segment.NetworkSegment, models_ml2.PortBindingLevel.segment_id == segment.NetworkSegment.id).\
                  join(sg_db.SecurityGroupPortBinding, models_v2.Port.id == sg_db.SecurityGroupPortBinding.port_id).\
                  filter(models_ml2.PortBindingLevel.host == self.agent.conf.host,
                         models_ml2.PortBindingLevel.driver == constants.DVS,

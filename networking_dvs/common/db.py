@@ -34,7 +34,7 @@ def compile_string_agg(element, compiler, **kwargs):
         order = ' ORDER BY %s' % compiler.process(element.order_by)
     else:
         order = ''
-    return 'GROUP_CONCAT(%s, %s SEPARATOR %s' % (
+    return 'GROUP_CONCAT(%s, %s SEPARATOR %s)' % (
         compiler.process(element.expr),
         order,
         compiler.process(element.separator)

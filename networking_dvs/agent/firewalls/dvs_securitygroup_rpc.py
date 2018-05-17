@@ -33,7 +33,7 @@ from networking_dvs.common.util import stats
 from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.utils import spec_builder as builder
 from networking_dvs.utils.dvs_util import dvportgroup_name
-from neutron.db import securitygroups_db as sg_db
+from neutron.db.models import securitygroup as sg_db
 from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin, DIRECTION_IP_PREFIX
 from neutron.plugins.ml2.models import PortBindingLevel
 from neutron_lib import context as neutron_context
@@ -69,9 +69,10 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         self.config = config
         self._security_groups = dict()  # id -> SecurityGroup
         self._portgroup_to_security_groups = dict()
-        provider_rules = {'network_id': None, 'security_group_rules': []}
-        self._add_ingress_ra_rule(provider_rules, Any(ANY_IPV6))
-        self._add_ingress_dhcp_rule(provider_rules, Any(ANY_IPV4, ANY_IPV6))
+        provider_rules = {'network_id': None, 'security_group_rules': [], 'fixed_ips': [ANY_IPV6]}
+        self._add_ingress_ra_rule(provider_rules)
+        dhcp_provider_rules = {'network_id': None, 'security_group_rules': [], 'fixed_ips': [ANY_IPV4, ANY_IPV6]}
+        self._add_ingress_dhcp_rule(dhcp_provider_rules)
         self._provider_rules = sg_util.patch_sg_rules(provider_rules['security_group_rules'])
         self._to_refresh = set()
         self._update_security_groups(self.context)

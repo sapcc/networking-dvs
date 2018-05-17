@@ -37,7 +37,7 @@ from networking_dvs.common import constants as dvs_const
 from networking_dvs.common import exceptions
 from networking_dvs.common.util import stats, optional_attr
 from networking_dvs.utils import spec_builder as builder
-from neutron.common import utils as neutron_utils
+from neutron_lib.utils import helpers
 from neutron._i18n import _
 
 LOG = log.getLogger(__name__)
@@ -1100,7 +1100,7 @@ def create_network_map_from_config(config, connection=None, **kwargs):
     """Creates physical network to dvs map from config"""
     connection = connection or connect(config)
     network_map = {}
-    for network, dvs in six.iteritems(neutron_utils.parse_mappings(config.network_maps)):
+    for network, dvs in six.iteritems(helpers.parse_mappings(config.network_maps)):
         network_map[network] = DVSController(dvs, connection=connection,
                                              rectify_wait=config.host_rectify_timeout, **kwargs)
     return network_map
