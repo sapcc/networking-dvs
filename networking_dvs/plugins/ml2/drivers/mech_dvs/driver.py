@@ -16,7 +16,7 @@ from neutron_lib import context
 from neutron.agent import securitygroups_rpc
 from neutron_lib.api.definitions import portbindings
 from neutron._i18n import _
-from neutron.plugins.common import constants as p_constants
+from neutron_lib import constants as neutron_constants
 from neutron_lib.plugins.ml2 import api
 from neutron.plugins.ml2.drivers import mech_agent
 from oslo_log import log
@@ -56,7 +56,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.info(_("VMware DVS mechanism driver initialized..."))
 
     def get_allowed_network_types(self, agent):
-        return ([p_constants.TYPE_VLAN, p_constants.TYPE_FLAT])
+        return ([neutron_constants.TYPE_VLAN, neutron_constants.TYPE_FLAT])
 
     def get_mappings(self, agent):
         config = agent['configurations']
