@@ -139,6 +139,7 @@ def _config_differs(current, update):
 
 @attr.s(**dvs_const.ATTR_ARGS)
 class PortGroup(object):
+    __weakref__ = attr.ib()
     ref = attr.ib()
     key = attr.ib(convert=str)
     name = attr.ib(convert=str)
