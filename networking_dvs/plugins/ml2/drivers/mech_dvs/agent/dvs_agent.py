@@ -349,7 +349,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 self.known_ports.pop(port_id, None)
                 self.unbound_ports.pop(port_id, None)
 
-        # If the segmentation id, or the port status changed, it will land in the updated_ports
+        # If the segmentation id, or the port status changed,
+        # it will land in the updated_ports
         updated_ports = self.updated_ports.copy()
 
         # Get new ports on the VMWare integration bridge
@@ -431,7 +432,9 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 # Configure the backing to the required dvportgroup
                 old_task = port.get('task')
                 # Delay the sync in case we have
-                port['task'] = eventlet.spawn_after(0.25, self._reassign_port_async, port, old_task)
+                port['task'] = eventlet.spawn_after(0.25,
+                                                    self._reassign_port_async,
+                                                    port, old_task)
 
     def _get_or_create_port_group(self, port):
         port_id = port['id']
@@ -517,8 +520,6 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
     def rpc_loop(self):
         while self._check_and_handle_signal():
-            trace_step = False
-
             with timeutils.StopWatch() as w:
                 self.process_ports()
 

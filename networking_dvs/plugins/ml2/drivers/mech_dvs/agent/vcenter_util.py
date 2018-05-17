@@ -498,7 +498,8 @@ class VCenter(object):
                 self.uuid_port_map[port_id] = port_info
                 port_list.append(port_info)
             else:
-                LOG.warn("Missing port %s for port_info %s", port_id, mac_address)
+                LOG.warn("Missing port %s for port_info %s",
+                         port_id, mac_address)
 
         if macs:
             LOG.warning(_LW("Could not find the following macs: %s"), macs)
@@ -517,8 +518,9 @@ class VCenter(object):
         connection_cookie = _cast(getattr(port_info, 'connectionCookie', None))
 
         if port_desc.connection_cookie != connection_cookie:
-            LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
-                                                              port_desc.connection_cookie, connection_cookie))
+            LOG.error("Cookie mismatch {} {} {} <> {}".format(
+                port_desc.mac_address, port_desc.port_key,
+                port_desc.connection_cookie, connection_cookie))
             return False
 
         for k, v in six.iteritems(_DVSPortDesc.from_dvs_port(port_info)):
@@ -542,7 +544,8 @@ class VCenter(object):
             specs = []
             for port in ports_on_switch:
                 network_type = port.get('network_type')
-                if (network_type == 'vlan' and not port.get('segmentation_id') is None) \
+                if (network_type == 'vlan'
+                        and not port.get('segmentation_id') is None)\
                         or network_type == 'flat':
                     spec = builder.neutron_to_port_config_spec(port)
                     if not CONF.AGENT.dry_run:
@@ -562,7 +565,8 @@ class VCenter(object):
 
     def _fetch_ports_by_mac(self, portgroup_key=None, mac_addr=None):
         for dvs in six.itervalues(self.uuid_dvs_map):
-            port_keys = dvs._dvs.FetchDVPortKeys(dvs._dvs, criteria=builder.port_criteria())
+            port_keys = dvs._dvs.FetchDVPortKeys(
+                dvs._dvs, criteria=builder.port_criteria())
             ports = dvs._dvs.FetchDVPorts(criteria=builder.port_criteria(
                 port_group_key=portgroup_key, port_key=port_keys)
             )
@@ -602,8 +606,10 @@ class VCenter(object):
             if not dvs:
                 LOG.warning("Received ports without known switch")
                 continue
-            ports_by_key = dict((port['port_desc'].port_key, port) for port in ports)
-            for port_info in dvs.get_port_info_by_portkey(list(six.iterkeys(ports_by_key))):
+            ports_by_key = dict((port['port_desc'].port_key, port)
+                                for port in ports)
+            for port_info in dvs.get_port_info_by_portkey(
+                    list(six.iterkeys(ports_by_key))):
                 port = ports_by_key[port_info.key]
                 if not VCenter.update_port_desc(port, port_info):
                     port_desc = port['port_desc']

@@ -709,7 +709,8 @@ class DVSController(object):
             raise exceptions.wrap_wmvare_vim_exception(e)
 
     @stats.timed()
-    def update_dvportgroup(self, pg, port_config=None, name=None, retries=3, sync=None):
+    def update_dvportgroup(self, pg, port_config=None, name=None,
+                           retries=3, sync=None):
         if sync:
             sync.wait()
 
@@ -750,7 +751,9 @@ class DVSController(object):
                 delta = timeutils.utcnow() - now
                 stats.timing('networking_dvs.dvportgroup.updated', delta)
 
-                LOG.debug("Updating portgroup {} took {} seconds.".format(pg.name, delta.seconds))
+                LOG.debug("Updating portgroup {} took {} seconds.".format(
+                    pg.name, delta.seconds
+                ))
                 return
             except vim.fault.DvsOperationBulkFault as e:
                 self.rectify_for_fault(e)
@@ -758,8 +761,9 @@ class DVSController(object):
                 if ntry >= retries:
                     raise exceptions.wrap_wmvare_vim_exception(e)
                 LOG.debug("Concurrent modification detected, will retry.")
-                props = util.get_object_properties_dict(self.connection, pg.ref,
-                                                        ["config.configVersion", "config.defaultPortConfig"])
+                props = util.get_object_properties_dict(
+                    self.connection, pg.ref,
+                    ["config.configVersion", "config.defaultPortConfig"])
                 pg.config_version = props["config.configVersion"]
                 pg.default_port_config = props["config.defaultPortConfig"]
 
@@ -782,7 +786,8 @@ class DVSController(object):
                     self.hosts_to_rectify[host_ref] = time.time()
                     hosts.add(host_ref)
                 else:
-                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref))
+                    LOG.debug(("Timeout for host {} is not reached yet,"
+                              " skipping.").format(host_ref))
             else:
                 self.hosts_to_rectify[host_ref] = time.time()
                 hosts.add(host_ref)

@@ -4,3 +4,4 @@ venv
 *.conf
 *.ini
 *.orig
+*.egg-info
