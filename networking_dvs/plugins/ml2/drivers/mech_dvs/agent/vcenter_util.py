@@ -600,8 +600,9 @@ class VCenter(object):
         return ports_by_mac
 
     def _read_dvs_ports(self, ports_by_mac):
-        # This loop can get very slow, if get_port_info_by_portkey gets port keys passed of instances, which are only
-        # partly connected, meaning: the instance is associated, but the link is not quite up yet
+        # This loop can get very slow, if get_port_info_by_portkey gets port
+        # keys passed of instances, which are only partly connected,
+        # meaning: the instance is associated, but the link is not quite up yet
         for dvs, ports in self.port_by_switch(six.itervalues(ports_by_mac)):
             if not dvs:
                 LOG.warning("Received ports without known switch")
