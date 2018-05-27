@@ -203,7 +203,8 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
             security_group_ids = timed_security_group_ids.keys()
 
         ids = self._setup_port_groups(context, security_group_ids)
-        if not security_group_ids:
+        LOG.debug("Local Security-Group ids: %s", ids)
+        if not ids:
             return
 
         to_configure = set()
@@ -235,7 +236,11 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                 for pg_name in names:
                     port_group = port_groups.get(pg_name)
                     if port_group:
-                        to_configure.add((dvs, pg_name, port_group))
+                        try:
+                            to_configure.add((dvs, pg_name, port_group))
+                        except TypeError:
+                            LOG.debug("Port-Group %s is gone", pg_name)
+                            pass
                     else:
                         try:
                             port_group = weakref.ref(dvs.get_portgroup_by_name(
@@ -250,6 +255,9 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                                      "for security-group %s",
                                      pg_name, sg_id)
                             port_groups.pop(pg_name, None)
+                            continue
+                        except TypeError:
+                            LOG.debug("Port-Group %s is gone", pg_name)
                             continue
 
         for dvs, pg_name, port_group in to_configure:

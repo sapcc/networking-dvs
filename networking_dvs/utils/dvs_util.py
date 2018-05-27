@@ -453,16 +453,20 @@ class DVSController(object):
 
         ports_by_port_group = defaultdict(list)
         for update_spec in update_specs:
-            port_group = self.get_port_group_for_port(self.ports_by_key[update_spec.key])
+            port_group = self.get_port_group_for_port(
+                self.ports_by_key[update_spec.key])
             ports_by_port_group[port_group].append(update_spec)
 
         for port_group, pg_update_specs in six.iteritems(ports_by_port_group):
             old_task = port_group.task if port_group else None
-            task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
+            task = spawn(self._apply_queued_update_specs,
+                         pg_update_specs, callbacks, sync=old_task)
             if port_group:
                 port_group.task = task
 
-    def _apply_queued_update_specs(self, update_specs, callbacks, retries=5, sync=None):
+    def _apply_queued_update_specs(self,
+                                   update_specs,
+                                   callbacks, retries=5, sync=None):
         if not update_specs:
             return
 
@@ -478,7 +482,8 @@ class DVSController(object):
                     port = self.ports_by_key.get(spec.key)
                     port_desc = port and port.get('port_desc')
                     if port_desc and port_desc.config_version:
-                        port_desc.config_version = str(int(port_desc.config_version) + 1)
+                        port_desc.config_version = str(
+                            int(port_desc.config_version) + 1)
 
                 if callbacks:
                     succeeded_keys = [str(spec.key) for spec in update_specs]
@@ -488,10 +493,12 @@ class DVSController(object):
 
                 return value
             except (vim.fault.DvsOperationBulkFault, vim.fault.NoHost) as e:
-                # We log it as error, but do not fail, so that the agent doesn't have to restart
+                # We log it as error, but do not fail, so that the agent
+                # doesn't have to restart
                 LOG.error("Failed to apply changes due to: %s", e.msg)
             except vim.fault.ConcurrentAccess:
-                for port_info in self.get_port_info_by_portkey([spec.key for spec in update_specs]):
+                for port_info in self.get_port_info_by_portkey(
+                        [spec.key for spec in update_specs]):
                     port_key = str(port_info.key)
                     port = self.ports_by_key[port_key]
                     port_desc = port['port_desc']
@@ -504,15 +511,17 @@ class DVSController(object):
                             update_spec_index = index
                             break
 
-                    connection_cookie = getattr(port_info, "connectionCookie", None)
+                    connection_cookie = getattr(port_info,
+                                                "connectionCookie", None)
 
                     if connection_cookie:
                         connection_cookie = str(connection_cookie)
 
                     if connection_cookie != port_desc.connection_cookie:
-                        LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
-                                                                          port_desc.connection_cookie,
-                                                                          connection_cookie))
+                        LOG.error("Cookie mismatch {} {} {} <> {}".format(
+                            port_desc.mac_address, port_desc.port_key,
+                            port_desc.connection_cookie,
+                            connection_cookie))
                         if update_spec_index:
                             failed_keys.append(port_key)
                             del update_specs[update_spec_index]
@@ -520,11 +529,12 @@ class DVSController(object):
                         config_version = str(port_info.config.configVersion)
                         port_desc.config_version = config_version
                         if update_spec:
-                            LOG.debug("Config version {} {} from {} ({}) to {}".format(port_desc.mac_address,
-                                                                                       port_desc.port_key,
-                                                                                       port_desc.config_version,
-                                                                                       update_spec.configVersion,
-                                                                                       config_version))
+                            LOG.debug("Config version {} {} from {} ({}) to {}"
+                                      .format(port_desc.mac_address,
+                                              port_desc.port_key,
+                                              port_desc.config_version,
+                                              update_spec.configVersion,
+                                              config_version))
 
                             update_spec.configVersion = config_version
                 continue
@@ -534,7 +544,8 @@ class DVSController(object):
     def _get_queued_update_changes(self):
         callbacks = set()
         # First merge the changes for the same port(key)
-        # Later changes overwrite earlier ones, non-inherited values take precedence
+        # Later changes overwrite earlier ones, non-inherited values
+        # take precedence
         # This cannot be called out-of-order
         update_specs_by_key = {}
         update_spec_queue = self._update_spec_queue
