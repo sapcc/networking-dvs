@@ -30,6 +30,7 @@ import oslo_messaging
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
+from oslo_service import eventlet_backdoor
 from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 
@@ -685,6 +686,8 @@ def main():
                                               resolution=resolution)
     except (ValueError, TypeError):
         pass
+
+    backdoor = eventlet_backdoor.initialize_if_enabled(cfg.CONF)
 
     try:
         agent = DvsNeutronAgent()
