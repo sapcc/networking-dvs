@@ -257,38 +257,6 @@ class EgressRule(TrafficRuleBuilder):
 class DropAllRule(TrafficRuleBuilder):
     action = vim.DvsDropNetworkRuleAction
 
-
-def build_port_rules(ports, hashed_rules=None):
-    port_config_list = []
-    hashed_rules = hashed_rules or {}
-    for port in ports:
-        port_desc = port.get('port_desc', None)
-        if port_desc:
-            key = port_desc.port_key
-            filter_config_key = port_desc.filter_config_key
-            version = port_desc.config_version
-        else:
-            key = port.get('binding:vif_details', {}).get('dvs_port_key')
-            filter_config_key = None
-            version = None
-
-        if key:
-            port_config = port_configuration(
-                key, port['security_group_rules'], hashed_rules,
-                version=version,
-                filter_config_key=filter_config_key)
-            port_config_list.append(port_config)
-    return port_config_list
-
-
-def get_port_rules(ports):
-    if not ports:
-        return
-
-    hashed_rules = {}
-    return build_port_rules(ports, hashed_rules)
-
-
 def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
