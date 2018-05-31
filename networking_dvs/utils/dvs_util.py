@@ -28,6 +28,9 @@ from oslo_log import log
 from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
+from pyVim.connect import SmartStubAdapter
+from pyVim.connect import VimSessionOrientedStub
+
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
 from requests.exceptions import ConnectionError
@@ -143,15 +146,20 @@ class PortGroup(object):
     key = attr.ib(convert=str)
     name = attr.ib(convert=str)
     description = attr.ib(convert=str)
-    config_version = attr.ib(default=None, convert=optional_attr(str), hash=False,
-                             cmp=False)  # Actually an int, but represented as a string
-    default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
+    # config_version: Actually an int, but represented as a string
+    config_version = attr.ib(
+        default=None, convert=optional_attr(str), hash=False, cmp=False)
+    default_port_config = attr.ib(
+        default=None, hash=False, repr=False, cmp=False)
     task = attr.ib(default=None, hash=False, repr=False, cmp=False)
-    ports = attr.ib(default=attr.Factory(dict), hash=False, cmp=False)  # mac-address -> port
+    ports = attr.ib(
+        default=attr.Factory(dict),
+        hash=False, cmp=False)  # mac-address -> port
 
     def fetch(self, connection):
         result = util.get_object_properties_dict(connection, self.ref,
-                                                 ['config.configVersion', 'config.defaultPortConfig'])
+                                                 ['config.configVersion',
+                                                  'config.defaultPortConfig'])
         self.config_version = result.pop('config.configVersion', None)
         self.default_port_config = result.pop('config.defaultPortConfig', None)
 
@@ -160,7 +168,8 @@ class PortGroup(object):
 class DVSController(object):
     """Controls one DVS."""
 
-    def __init__(self, dvs_name, connection=None, pool=None, rectify_wait=120, quit_event=None):
+    def __init__(self, dvs_name, connection=None, pool=None,
+                 rectify_wait=120, quit_event=None):
         super(DVSController, self).__init__()
         self.connection = connection
         self.dvs_name = dvs_name
@@ -287,7 +296,8 @@ class DVSController(object):
         if max_mtu == self._max_mtu:
             return
         try:
-            pg_config_info = vim.VMwareDVSConfigSpec(maxMtu=max_mtu, configVersion=self._config_version)
+            pg_config_info = vim.VMwareDVSConfigSpec(
+                maxMtu=max_mtu, configVersion=self._config_version)
             pg_update_task = self._dvs.ReconfigureDvs_Task(spec=pg_config_info)
 
             wait_for_task(pg_update_task, si=self.connection)
@@ -344,7 +354,8 @@ class DVSController(object):
             listener(self, pg)
 
     def update_network(self, network, original=None):
-        original_name = self._get_net_name(self.dvs_name, original) if original else None
+        original_name = self._get_net_name(self.dvs_name, original) \
+            if original else None
         current_name = self._get_net_name(self.dvs_name, network)
         blocked = not network['admin_state_up']
         try:
@@ -360,7 +371,8 @@ class DVSController(object):
                     pg_config_info.configVersion,
                     blocked=blocked)
                 pg_spec.name = current_name
-                pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(
+                    spec=pg_spec)
 
                 wait_for_task(pg_update_task, si=self.connection)
                 LOG.info(_LI('Network %(name)s updated'),
@@ -388,7 +400,9 @@ class DVSController(object):
             return True
         except vim.fault.ResourceInUse as e:
             if ignore_in_use:
-                LOG.info(_LW("Could not delete port-group %(name)s. Reason: %(message)s")
+                LOG.info(_LI((
+                    "Could not delete port-group %(name)s. "
+                    "Reason: %(message)s"))
                          % {'name': pg.name, 'message': e.message})
                 return False
             else:
@@ -406,17 +420,20 @@ class DVSController(object):
         if not update_specs:
             return
 
-        LOG.debug("Update Ports: {}".format(sorted([spec.name for spec in update_specs])))
+        LOG.debug("Update Ports: {}".format(
+            sorted([spec.name for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         try:
-            wait_for_task(update_task, si=self.connection)  # -> May raise DvsOperationBulkFault, when host is down
+            # May raise DvsOperationBulkFault, when host is down
+            wait_for_task(update_task, si=self.connection)
             return update_task.info.result
         except vim.fault.NotFound:
             return
 
     def queue_update_specs(self, update_specs, callback=None):
         self._update_spec_queue.append((update_specs, [callback]))
-        stats.gauge('networking_dvs.update_spec_queue_length', len(self._update_spec_queue))
+        stats.gauge('networking_dvs.update_spec_queue_length',
+                    len(self._update_spec_queue))
 
     def filter_update_specs(self, filter_func):
         self._update_spec_queue = [
@@ -1090,18 +1107,31 @@ class DVSController(object):
         return True
 
 
-def connect(config):
+def connect(conf):
     connection = None
     while not connection:
         try:
-            if not config.ca_certs:
-                connection = SmartConnectNoSSL(host=config.vsphere_hostname,
-                                               user=config.vsphere_login,
-                                               pwd=config.vsphere_password)
+            if not conf.ca_certs:
+                import ssl
+                if hasattr(ssl, '_create_unverified_context'):
+                    ssl_context = ssl._create_unverified_context()
+                else:
+                    ssl_context = None
             else:
-                connection = SmartConnect(host=config.vsphere_hostname,
-                                          user=config.vsphere_login,
-                                          pwd=config.vsphere_password)
+                ssl_context = ssl.create_default_context(capath=conf.ca_certs)
+
+            smart_stub = SmartStubAdapter(
+                host=conf.vsphere_hostname,
+                sslContext=ssl_context,
+                connectionPoolTimeout=0)
+
+            session_stub = VimSessionOrientedStub(
+                smart_stub,
+                VimSessionOrientedStub.makeUserLoginMethod(
+                    conf.vsphere_login, conf.vsphere_password))
+
+            connection = vim.ServiceInstance('ServiceInstance',
+                                             session_stub)
 
             if connection:
                 atexit.register(Disconnect, connection)
@@ -1116,7 +1146,9 @@ def create_network_map_from_config(config, connection=None, **kwargs):
     """Creates physical network to dvs map from config"""
     connection = connection or connect(config)
     network_map = {}
-    for network, dvs in six.iteritems(neutron_utils.parse_mappings(config.network_maps)):
-        network_map[network] = DVSController(dvs, connection=connection,
-                                             rectify_wait=config.host_rectify_timeout, **kwargs)
+    for network, dvs in six.iteritems(
+            neutron_utils.parse_mappings(config.network_maps)):
+        network_map[network] = DVSController(
+            dvs, connection=connection,
+            rectify_wait=config.host_rectify_timeout, **kwargs)
     return network_map
