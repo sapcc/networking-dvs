@@ -257,38 +257,6 @@ class EgressRule(TrafficRuleBuilder):
 class DropAllRule(TrafficRuleBuilder):
     action = vim.DvsDropNetworkRuleAction
 
-
-def build_port_rules(ports, hashed_rules=None):
-    port_config_list = []
-    hashed_rules = hashed_rules or {}
-    for port in ports:
-        port_desc = port.get('port_desc', None)
-        if port_desc:
-            key = port_desc.port_key
-            filter_config_key = port_desc.filter_config_key
-            version = port_desc.config_version
-        else:
-            key = port.get('binding:vif_details', {}).get('dvs_port_key')
-            filter_config_key = None
-            version = None
-
-        if key:
-            port_config = port_configuration(
-                key, port['security_group_rules'], hashed_rules,
-                version=version,
-                filter_config_key=filter_config_key)
-            port_config_list.append(port_config)
-    return port_config_list
-
-
-def get_port_rules(ports):
-    if not ports:
-        return
-
-    hashed_rules = {}
-    return build_port_rules(ports, hashed_rules)
-
-
 def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
@@ -376,7 +344,7 @@ def _create_rule(rule_info, ip=None, name=None):
             rule.backward_port_range = (
                 rule_info.source_port_range_min or source_port_range_min_default,
                 rule_info.source_port_range_max or dvs_const.MAX_EPHEMERAL_PORT)
-    except KeyError:
+    except AttributeError:
         return None
 
     return rule
@@ -505,7 +473,6 @@ def _consolidate_ipv4_6(rules):
             id_ = (rule.direction, rule.protocol, rule.port_range_min, rule.port_range_max,
                    rule.source_port_range_min, rule.source_port_range_max)
             grouped[id_].append(rule)
-
     for ruleset in six.itervalues(grouped):
         # Cannot be zero
         if len(ruleset) == 1:
