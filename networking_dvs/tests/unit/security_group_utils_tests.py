@@ -20,7 +20,6 @@ class SecurityGroupUtilsTest(testtools.TestCase):
 
     def setUp(self):
         super(SecurityGroupUtilsTest, self).setUp()
-        #self.CONF = self.useFixture(fixture_config.Config()).conf
         self.ipv4_ethertype = 'IPv4'
         self.ipv6_ethertype = 'IPv6'
         self.FAKE_PREFIX = {'IPv4': '10.0.0.0/24',
@@ -138,16 +137,6 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         sg_aggr = sg_utils.SgAggr()
         sg_aggr.rules = [fake_rule]
         return sg_aggr
-
-    """def _prepare_fake_portgroup(self):
-        port_group_spec = fake.DataObject()
-        port_group_spec.name = 'port_group_name'
-        port_group_spec.vlanId = 100
-        port_group_spec.vswitchName = 'vswitch_name'
-
-        port_group = fake.DataObject()
-        port_group.vswitch = 'vswitch_name'
-        port_group.spec = port_group_spec"""
 
     def _fake_sg_rule_for_ethertype(self, ethertype=None, remote_group=None):
 
