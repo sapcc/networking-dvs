@@ -21,7 +21,7 @@ from collections import defaultdict, Counter
 import attr
 import six
 from ipaddress import ip_network, collapse_addresses, IPv4Network, IPv6Network
-from neutron._i18n import _
+#from neutron._i18n import _
 from oslo_log import log
 from pyVmomi import vim, vmodl
 from eventlet import sleep

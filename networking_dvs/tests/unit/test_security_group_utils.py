@@ -1,15 +1,18 @@
 """Tests for security group utils"""
+import unittest
 
 import mock
 import six
-import unittest
-from oslo_utils import uuidutils
 import testtools
-from pyVmomi import vim, vmodl
-from oslo_config import fixture as fixture_config
-from oslo_log import log as logging
+
+from ipaddress import ip_network
+from ipaddress import IPv4Network
+from ipaddress import IPv6Network
 from networking_dvs.utils import security_group_utils as sg_utils
-from ipaddress import ip_network, IPv4Network, IPv6Network
+from oslo_log import log as logging
+from oslo_utils import uuidutils
+from pyVmomi import vim
+
 LOG = logging.getLogger(__name__)
 
 FAKE_SGID = 'fake_sgid'
@@ -44,8 +47,8 @@ class SecurityGroupUtilsTest(testtools.TestCase):
     def _get_fake_rule(self, rule_id=None,
                       direction=None, ethertype=None,
                       protocol=None, port_range_min=0, port_range_max=0,
-                      source_ip_prefix=None,source_port_range_min=0,
-                      source_port_range_max=65535):
+                      source_ip_prefix=None, source_port_range_min=0,
+                       source_port_range_max=65535):
 
         rule = sg_utils.Rule(ethertype, protocol)
         rule.ethertype = ethertype
@@ -130,7 +133,8 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         return fake_port
 
     def _prepare_fake_sg_aggr(self):
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(68, 68),
                                        backward_port_range=(67, 67))
@@ -143,7 +147,9 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         return {'direction': 'ingress', 'remote_group_id': remote_group,
                 'ethertype': ethertype}
 
-    def _get_fake_filter_policy(self, rules=None, filter_config_key=None, filter_policy=None):
+    def _get_fake_filter_policy(self, rules=None,
+                                filter_config_key=None,
+                                filter_policy=None):
         filter_policy = vim.DvsFilterPolicy()
         if rules:
             traffic_ruleset = vim.DvsTrafficRuleset()
@@ -162,23 +168,20 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         return filter_policy
 
     def test__to_ip_network_with_ipv4(self):
-        result = sg_utils._to_ip_network(self.get_fake_ipv4_network(six.u('0.0.0.0/0')))
+        result = sg_utils._to_ip_network(
+            self.get_fake_ipv4_network(six.u('0.0.0.0/0')))
         expected = IPv4Network(u'0.0.0.0/0')
         self.assertEqual(result, expected)
 
-    """Scenario with passing text instead of 'IPv4Network', 'IPv6Network' objects"""
+    """Scenario with passing text instead of 'IPv4Network',
+     'IPv6Network' objects"""
     def test__to_ip_network_with_ipv4_text(self):
         result = sg_utils._to_ip_network(six.u('0.0.0.0/0'))
         expected = IPv4Network(u'0.0.0.0/0')
         self.assertEqual(result, expected)
 
-
-    def test__to_ip_network_with_ipv6(self):
-        result = sg_utils._to_ip_network(self.get_fake_ipv6_network())
-        expected = IPv6Network(u'::/0')
-        self.assertEqual(result, expected)
-
-    """Scenario with passing text instead of 'IPv4Network', 'IPv6Network' objects"""
+    """Scenario with passing text instead of 'IPv4Network',
+     'IPv6Network' objects"""
     def test__to_ip_network_with_ipv6(self):
         result = sg_utils._to_ip_network(six.u('::/0'))
         expected = IPv6Network(u'::/0')
@@ -194,37 +197,38 @@ class SecurityGroupUtilsTest(testtools.TestCase):
                                           source_port_range_max=0)
 
         rules = [fake_rule]
-        #expected = self._get_fake_filter_policy(rules=None)
 
         result = sg_utils.compile_filter_policy(rules)
         self.assertIsNotNone(result)
 
     def test_compile_filter_policy_with_hashed_rules(self):
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(68, 68),
                                        backward_port_range=(67, 67))
-
 
         fake_hashed1 = vim.DvsTrafficRule()
         fake_hashed2 = vim.DvsTrafficRule()
 
         rules = [fake_rule]
         hashed_rules = {fake_rule: [fake_hashed1, fake_hashed2]}
-        result = sg_utils.compile_filter_policy(rules, hashed_rules=hashed_rules)
+        result = sg_utils.compile_filter_policy(rules,
+                                                hashed_rules=hashed_rules)
         self.assertIsNotNone(result)
 
     def test__rule_excepted_true(self):
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(68, 68),
                                        backward_port_range=(67, 67))
         result = sg_utils._rule_excepted(fake_rule)
         self.assertTrue(result)
 
-
     def test__rule_excepted_false_ipv4(self):
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(546, 546),
                                        backward_port_range=(547, 547))
@@ -232,7 +236,8 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         self.assertFalse(result)
 
     def test__rule_excepted_true_ipv6(self):
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv6", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv6",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(546, 546),
                                        backward_port_range=(547, 547))
@@ -241,9 +246,11 @@ class SecurityGroupUtilsTest(testtools.TestCase):
 
     def test__create_rule(self):
         source_ip_prefix = self.get_fake_ipv4_network(six.u('10.192.168.11'))
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='ingress', port_range_min=23,
-                                       port_range_max=23, source_ip_prefix=source_ip_prefix,
+                                       port_range_max=23,
+                                       source_ip_prefix=source_ip_prefix,
                                        port_range=(546, 546),
                                        backward_port_range=(547, 547))
 
@@ -254,13 +261,14 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         source_ip_prefix = self.get_fake_ipv4_network(six.u('10.192.168.11'))
         fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
                                        direction='ingress', port_range_min=23,
-                                       port_range_max=23, source_ip_prefix=source_ip_prefix,
+                                       port_range_max=23,
+                                       source_ip_prefix=source_ip_prefix,
                                        port_range=(546, 546),
                                        backward_port_range=(547, 547))
 
         """
-        Simulating missing attribute for raise AttributeError which 
-        will result in None    
+        Simulating missing attribute for raise AttributeError which
+        will result in None
         """
         del fake_rule.port_range_min
 
@@ -268,7 +276,8 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         self.assertIsNone(result)
 
     def test_patch_sg_rules(self):
-        sg_rule = self._fake_sg_rule_for_ethertype(remote_group={'IPv4': [OTHER_SGID, FAKE_SGID],
+        sg_rule = self._fake_sg_rule_for_ethertype(
+                           remote_group={'IPv4': [OTHER_SGID, FAKE_SGID],
                            'IPv6': [FAKE_SGID]})
 
         expected = []
@@ -313,7 +322,8 @@ class SecurityGroupUtilsTest(testtools.TestCase):
 
     def test_apply_rules(self):
 
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4", protocol='udp',
+        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
+                                       protocol='udp',
                                        direction='incomingPackets',
                                        port_range=(68, 68),
                                        backward_port_range=(67, 67))
@@ -347,7 +357,6 @@ class SecurityGroupUtilsTest(testtools.TestCase):
                                           port_range_max=65535,
                                           source_port_range_min=0,
                                           source_port_range_max=0)
-
 
         fake_rules = [fake_rule]
         result = sg_utils._consolidate_rules(fake_rules)

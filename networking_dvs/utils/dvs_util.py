@@ -1084,7 +1084,7 @@ def connect(config):
                                                user=config.vsphere_login,
                                                pwd=config.vsphere_password)
             else:
-                connection = SmartConnect(host=config.vsphere_hostname,
+                connection = SmartConnectNoSSL(host=config.vsphere_hostname,
                                           user=config.vsphere_login,
                                           pwd=config.vsphere_password)
 
