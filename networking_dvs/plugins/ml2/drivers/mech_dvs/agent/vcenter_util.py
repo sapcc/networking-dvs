@@ -43,14 +43,19 @@ from oslo_db.sqlalchemy import enginefacade
 from osprofiler.profiler import trace_cls
 
 from httplib import BadStatusLine
-from networking_dvs.common import config as dvs_config, util as c_util, constants
-from networking_dvs.utils import dvs_util, spec_builder as builder, security_group_utils as sg_util
+from networking_dvs.common import config as dvs_config
+from networking_dvs.common import constants
+from networking_dvs.common import util as c_util
+from networking_dvs.utils import dvs_util
+from networking_dvs.utils import spec_builder as builder
+from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.common.db import string_agg
 
 CONF = dvs_config.CONF
 LOG = log.getLogger(__name__)
 
 _DB_AGG_SEPARATOR = ','
+
 
 def _create_session(config):
     """Create Vcenter Session for API Calling."""
@@ -66,7 +71,8 @@ def _cast(value, _type=str):
 
 def get_all_cluster_mors(connection):
     """Get all the clusters in the vCenter."""
-    query = c_util.get_objects(connection, vim.ClusterComputeResource, 100, ['name'])
+    query = c_util.get_objects(connection,
+                               vim.ClusterComputeResource, 100, ['name'])
     with c_util.WithRetrieval(connection, query) as compute_resources:
         for mor in compute_resources:
             yield mor
@@ -84,35 +90,43 @@ def get_cluster_ref_by_name(connection, cluster_name):
 @attr.s(**constants.ATTR_ARGS)
 class _DVSPortDesc(object):
     dvs_uuid = attr.ib(convert=str, cmp=True, hash=True)
-    port_key = attr.ib(convert=str, cmp=True, hash=True)  # It is an int, but the WDSL defines it as a string
+    # port_key is an int, but the WDSL defines it as a string
+    port_key = attr.ib(convert=str, cmp=True, hash=True)
     port_group_key = attr.ib(convert=str)
     mac_address = attr.ib(convert=str, cmp=True, hash=True)
-    connection_cookie = attr.ib(convert=str)  # Same as with port_key, int which is represented as a string
+    # connection_cookie: Same as with port_key, int represented as a string
+    connection_cookie = attr.ib(convert=str)
     connected = attr.ib(default=False)
     status = attr.ib(convert=str, default='')
-    config_version = attr.ib(convert=str, default='')  # Same as with port_key, int which is represented as a string
+    # config_version: Same as with port_key, int represented as a string
+    config_version = attr.ib(convert=str, default='')
     vlan_id = attr.ib(default=None)
     link_up = attr.ib(default=None)
     filter_config_key = attr.ib(convert=str, default='')
     connected_since = attr.ib(default=None)
-    port_group_history = attr.ib(default=attr.Factory(list), cmp=False, hash=False)
+    port_group_history = attr.ib(default=attr.Factory(list),
+                                 cmp=False, hash=False)
 
     def is_connected(self):
         return self.mac_address and self.connected and self.status == 'ok'
 
     @staticmethod
     def from_dvs_port(port, **values):
-        # Port can be either DistributedVirtualSwitchPortConnection, or DistributedVirtualPort
+        # Port can be either DistributedVirtualSwitchPortConnection,
+        # or DistributedVirtualPort
         values.update(
             # switchUuid in connection, dvsUuid in port
-            dvs_uuid=_cast(getattr(port, 'switchUuid', None) or getattr(port, 'dvsUuid', None)),
+            dvs_uuid=_cast(getattr(port, 'switchUuid', None)
+                           or getattr(port, 'dvsUuid', None)),
             # portKey in connection, key in port
-            port_key=_cast(getattr(port, 'portKey', None) or getattr(port, 'key', None)),
+            port_key=_cast(getattr(port, 'portKey', None)
+                           or getattr(port, 'key', None)),
             port_group_key=_cast(port.portgroupKey),
             connection_cookie=_cast(getattr(port, 'connectionCookie', None)),
         )
-        # The next ones are not part of DistributedVirtualSwitchPortConnection as returned by the backing.port,
-        # but a DistributedVirtualPort as returned by FetchDVPorts
+        # The next ones are not part of DistributedVirtualSwitchPortConnection
+        # as returned by the backing.port, but a DistributedVirtualPort as
+        # returned by FetchDVPorts
         port_config = getattr(port, 'config', None)
         if port_config:
             values['config_version'] = _cast(port_config.configVersion)
@@ -160,7 +174,6 @@ class VCenterMonitor(object):
         # Map of the VMs and their NICs by the hardware key
         # e.g vmobrefs -> keys -> _DVSPortMonitorDesc
         self._hardware_map = defaultdict(dict)
-        # super(VCenterMonitor, self).__init__(target=self._run, args=(config,))
         self.pool = pool or eventlet.greenpool.GreenPool(5)
         self.config = config
         self.thread = None
@@ -175,7 +188,8 @@ class VCenterMonitor(object):
         except AssertionError:  # In case someone already send an event
             pass
 
-        # This will abort the WaitForUpdateEx early, so it will cancel leave the loop timely
+        # This will abort the WaitForUpdateEx early,
+        # so it will cancel leave the loop timely
         if self.connection and self._property_collector:
             try:
                 self._property_collector.CancelWaitForUpdates()
@@ -195,7 +209,8 @@ class VCenterMonitor(object):
 
             while not self._quit_event.ready():
                 try:
-                    result = self._property_collector.WaitForUpdatesEx(version=version, options=wait_options)
+                    result = self._property_collector.WaitForUpdatesEx(
+                        version=version, options=wait_options)
                     self.iteration += 1
                     if result:
                         version = result.version
@@ -213,8 +228,11 @@ class VCenterMonitor(object):
                     now = utcnow()
                     for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
                         if port_desc.status != 'untried' or 0 == self.iteration - iteration:
-                            LOG.debug('Down: {} {} for {} {} {}'.format(mac, port_desc.port_key, self.iteration - iteration,
-                                                                        (now - when).total_seconds(), port_desc.status))
+                            LOG.debug('Down: {} {} for {} {} {}'.format(
+                                mac, port_desc.port_key,
+                                self.iteration - iteration,
+                                (now - when).total_seconds(),
+                                port_desc.status))
                     sleep(0)
                 except BadStatusLine:
                     sleep(1)
@@ -223,7 +241,8 @@ class VCenterMonitor(object):
             # If the event is set, the request was canceled in self.stop()
             if not self._quit_event.ready():
                 LOG.info("Waiting for updates was cancelled unexpectedly")
-                raise e  # This will kill the whole process and we start again from scratch
+                # Kill the whole process and start again from scratch
+                raise e
 
     def _run_safe(self):
         while not self._quit_event.ready():
@@ -237,17 +256,19 @@ class VCenterMonitor(object):
     def _create_property_filter(self):
         if self._property_collector:
             return
-
-        self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
+        pc = self.connection.content.propertyCollector
+        self._property_collector = pc.CreatePropertyCollector()
         connection = self.connection
 
         if not self.config.cluster_name:
             LOG.info("No cluster specified")
             container = connection.content.rootFolder
         else:
-            container = get_cluster_ref_by_name(connection, self.config.cluster_name)
+            container = get_cluster_ref_by_name(connection,
+                                                self.config.cluster_name)
             if not container:
-                LOG.error(_LE("Cannot find cluster with name '{}'").format(self.config.cluster_name))
+                LOG.error(_LE("Cannot find cluster with name '{}'").format(
+                    self.config.cluster_name))
                 exit(2)
 
         container_view = connection.content.viewManager.CreateContainerView(
@@ -255,17 +276,24 @@ class VCenterMonitor(object):
                                                type=[vim.VirtualMachine],
                                                recursive=True)
 
-        traversal_spec = c_util.build_traversal_spec('traverseEntities', vim.ContainerView, 'view',
-                                                       False, None)
-        object_spec = c_util.build_object_spec(container_view, [traversal_spec])
+        traversal_spec = c_util.build_traversal_spec('traverseEntities',
+                                                     vim.ContainerView, 'view',
+                                                     False, None)
+        object_spec = c_util.build_object_spec(container_view,
+                                               [traversal_spec])
 
-        # Only static types work, so we have to get all hardware, still faster than retrieving individual items
+        # Only static types work, so we have to get all hardware
+        # still faster than retrieving individual items
         vm_properties = ['runtime.powerState', 'config.hardware.device']
-        property_specs = [c_util.build_property_spec(vim.VirtualMachine, vm_properties)]
+        property_specs = [c_util.build_property_spec(vim.VirtualMachine,
+                                                     vm_properties)]
 
-        property_filter_spec = c_util.build_property_filter_spec(property_specs, [object_spec])
+        property_filter_spec = c_util.build_property_filter_spec(
+            property_specs, [object_spec])
 
-        return self._property_collector.CreateFilter(spec=property_filter_spec, partialUpdates=True)  # -> PropertyFilter
+        # -> PropertyFilter
+        return self._property_collector.CreateFilter(
+            spec=property_filter_spec, partialUpdates=True)
 
     def _handle_removal(self, vm):
         vm_hw = self._hardware_map.pop(vm, {})
@@ -273,7 +301,8 @@ class VCenterMonitor(object):
             if isinstance(port_desc, _DVSPortMonitorDesc):
                 mac_address = port_desc.mac_address
                 port_desc.status = 'deleted'
-                LOG.debug("Removed {} {}".format(mac_address, port_desc.port_key))
+                LOG.debug("Removed {} {}".format(mac_address,
+                                                 port_desc.port_key))
                 self.down_ports.pop(mac_address, None)
                 self.untried_ports.pop(mac_address, None)
                 self.changed.add(port_desc)
@@ -325,12 +354,17 @@ class VCenterMonitor(object):
                         self._handle_port_update(port_desc, now)
                     elif 'backing.port.portgroupKey' == attribute:
                         change_val = str(change_val)
-                        port_desc.port_group_history.append(port_desc.port_group_key)
-                        port_desc.port_group_history = [key for key in port_desc.port_group_history if key != change_val]
+                        pgh = port_desc.port_group_history
+                        # Save the old value
+                        pgh.append(port_desc.port_group_key)
+                        # Remove the current port-group-key from the history
+                        port_desc.port_group_history = [
+                            key for key in pgh if key != change_val]
                         port_desc.port_group_key = change_val
                         self._handle_port_update(port_desc, now)
                 else:
-                    port_desc = self._port_desc_from_nic_change(vmobref, change_val)
+                    port_desc = self._port_desc_from_nic_change(vmobref,
+                                                                change_val)
                     if port_desc:
                         vm_hw[port_desc.device_key] = port_desc
                         self._handle_port_update(port_desc, now)
@@ -377,34 +411,40 @@ class VCenterMonitor(object):
             return
 
         if port_desc.is_connected():
-            then, _, iteration = self.down_ports.pop(mac_address, (None, None, None))
+            then, _, iteration = self.down_ports.pop(
+                mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
-                LOG.debug("Port {} {} was down for {} ({})".format(mac_address, port_desc.port_key,
-                                                                   (now - then).total_seconds(),
-                                                                   (self.iteration - iteration)))
+                LOG.debug("Port {} {} was down for {} ({})".format(
+                    mac_address, port_desc.port_key,
+                    (now - then).total_seconds(),
+                    (self.iteration - iteration)))
             elif not port_desc in self.changed:
-                LOG.debug("Port {} {} came up connected".format(mac_address, port_desc.port_key))
+                LOG.debug("Port {} {} came up connected".format(
+                    mac_address, port_desc.port_key))
             port_desc.connected_since = now
             self.changed.add(port_desc)
         else:
-            power_state = self._hardware_map[port_desc.vmobref].get('power_state', None)
+            power_state = self._hardware_map[port_desc.vmobref].get(
+                'power_state', None)
             if power_state != 'poweredOn':
                 self.untried_ports[mac_address] = port_desc
             elif not port_desc in self.down_ports:
                 status = port_desc.status
                 LOG.debug(
-                    "Port {} {} registered as down: {} {}".format(mac_address, port_desc.port_key, status, power_state))
+                    "Port {} {} registered as down: {} {}".format(
+                        mac_address, port_desc.port_key, status, power_state))
                 self.down_ports[mac_address] = (now, port_desc, self.iteration)
 
 
 @trace_cls("vmwareapi", hide_args=True)
 class VCenter(object):
-    # PropertyCollector discovers changes on vms and their hardware and produces
-    #    (mac, switch, portKey, portGroupKey, connectable.connected, connectable.status)
-    #    internally, it keeps internally vm and key for identifying updates
+    # PropertyCollector discovers changes on vms and their hardware
+    # and produces
+    #  (mac, switch, portKey, portGroupKey,
+    #   connectable.connected, connectable.status)
+    # internally, it keeps internally vm and key for identifying updates
     # Subsequently, the mac has to be identified with a port
-    #
 
     def __init__(self, config=None, pool=None, agent=None):
         self.pool = pool
@@ -412,20 +452,23 @@ class VCenter(object):
         self.config = config or CONF.ML2_VMWARE
         self.connection = _create_session(self.config)
         self._quit_event = Event()
-        self._monitor_process = VCenterMonitor(self, self.config, quit_event=self._quit_event,
-                                               connection=self.connection, pool=self.pool,
-                                               )
+        self._monitor_process = VCenterMonitor(
+            self, self.config, quit_event=self._quit_event,
+            connection=self.connection, pool=self.pool)
         self.queue = Queue(None)
 
         self.uuid_port_map = {}
-        self.mac_port_map = {}  # Needed to keep the same port object across port-group moves
 
+        # Needed to keep the same port object across port-group moves
+        self.mac_port_map = {}
         self.uuid_dvs_map = {}
         self.network_dvs_map = {}
 
         for network, dvs in six.iteritems(
-                dvs_util.create_network_map_from_config(self.config, connection=self.connection, pool=pool,
-                                                        quit_event=self._quit_event)):
+                dvs_util.create_network_map_from_config(
+                    self.config,
+                    connection=self.connection, pool=pool,
+                    quit_event=self._quit_event)):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
@@ -435,7 +478,9 @@ class VCenter(object):
             port_id = port['id']
             dvs = self.network_dvs_map.get(physical_network)
             if not dvs:
-                LOG.error("Could not find switch for the physical network %s (port %s)", physical_network, port_id)
+                LOG.error("Could not find switch"
+                          " for the physical network %s (port %s)",
+                          physical_network, port_id)
                 continue
             sg_set = sg_util.security_group_set(port)
             if not sg_set:
@@ -444,7 +489,8 @@ class VCenter(object):
             mac_address = port['mac_address']
             pg = dvs.get_port_group_for_security_group_set(sg_set)
             if not pg:
-                LOG.warning("Could not get portgroup %s for port %s", sg_set, port_id)
+                LOG.warning("Could not get portgroup %s for port %s",
+                            sg_set, port_id)
             else:
                 pg.ports[mac_address] = port
             self.mac_port_map[mac_address] = port
@@ -459,7 +505,8 @@ class VCenter(object):
         for port_desc in changed:
             dvs = self.get_dvs_by_uuid(port_desc.dvs_uuid)
             if not dvs:
-                LOG.debug("Switch %s not managed by DVS-Agent", port_desc.dvs_uuid)
+                LOG.debug("Switch %s not managed by DVS-Agent",
+                          port_desc.dvs_uuid)
                 continue
 
             if port_desc.status != 'deleted':
@@ -479,7 +526,8 @@ class VCenter(object):
         LOG.debug("Got the following macs %s", macs)
         self._read_dvs_ports(ports_by_mac)
 
-        # We might skip getting objects from the db here, if they are already present
+        # We might skip getting objects from the db here,
+        # if they are already present
         port_list = []
 
         for mac, port in six.iteritems(ports_by_mac):
@@ -513,7 +561,8 @@ class VCenter(object):
 
     @staticmethod
     def update_port_desc(port, port_info):
-        # Validate connectionCookie, so we still have the same instance behind that portKey
+        # Validate connectionCookie,
+        # so we still have the same instance behind that portKey
         port_desc = port['port_desc']
         connection_cookie = _cast(getattr(port_info, 'connectionCookie', None))
 
@@ -746,7 +795,10 @@ def main():
             description = getattr(port_config, 'description', None)
             if not cookie and (name or description):
                 configs.append(
-                    builder.port_config_spec(port.key, version=port_config.configVersion, name='', description=''))
+                    builder.port_config_spec(
+                        port.key,
+                        version=port_config.configVersion,
+                        name='', description=''))
 
         if configs:
             dvs.update_ports(configs)

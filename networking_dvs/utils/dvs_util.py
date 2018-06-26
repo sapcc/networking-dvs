@@ -939,20 +939,27 @@ class DVSController(object):
 
         dvs_list = {}
         with util.WithRetrieval(connection,
-                                util.get_objects(connection, vim.DistributedVirtualSwitch, 100, ['name', 'portgroup'])
+                                util.get_objects(
+                                    connection,
+                                    vim.DistributedVirtualSwitch,
+                                    100,
+                                    ['name', 'portgroup'])
                                 ) as dvswitches:
             for dvs in dvswitches:
                 p = {p.name: p.val for p in dvs.propSet}
                 if dvs_name == p['name']:
-                    return dvs.obj, DVSController._get_datacenter(connection, dvs.obj)
+                    return dvs.obj, DVSController._get_datacenter(
+                        connection, dvs.obj)
                 dvs_list[dvs.obj] = p['portgroup']
 
         for dvs, port_groups in six.iteritems(dvs_list):
             for pg in port_groups:
                 try:
-                    name = util.get_object_property(self.connection, pg, 'name')
+                    name = util.get_object_property(
+                        self.connection, pg, 'name')
                     if dvs_name == name:
-                        return dvs, DVSController._get_datacenter(connection, dvs)
+                        return dvs, DVSController._get_datacenter(
+                            connection, dvs)
                 except vim.fault.VimFault:
                     pass
 
@@ -969,9 +976,13 @@ class DVSController(object):
 
         prop_spec = util.build_property_spec(vim.Datacenter, ['name'])
         select_set = util.build_selection_spec('ParentTraversalSpec')
-        select_set = util.build_traversal_spec('ParentTraversalSpec', vim.ManagedEntity, 'parent', False, [select_set])
+        select_set = util.build_traversal_spec('ParentTraversalSpec',
+                                               vim.ManagedEntity,
+                                               'parent',
+                                               False, [select_set])
         obj_spec = util.build_object_spec(entity_ref, [select_set])
-        prop_filter_spec = util.build_property_filter_spec([prop_spec], [obj_spec])
+        prop_filter_spec = util.build_property_filter_spec([prop_spec],
+                                                           [obj_spec])
         options = vmodl.query.PropertyCollector.RetrieveOptions()
         options.maxObjects = max_objects
         retrieve_result = property_collector.RetrievePropertiesEx(

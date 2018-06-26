@@ -34,6 +34,7 @@ from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.utils import spec_builder as builder
 from networking_dvs.utils.dvs_util import dvportgroup_name
 from neutron.db import securitygroups_db as sg_db
+from neutron.db.models_v2 import Port
 from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin
 from neutron.db.securitygroups_rpc_base import DIRECTION_IP_PREFIX
 from neutron.plugins.ml2.models import PortBindingLevel
@@ -108,15 +109,18 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         sgs = self._pg_to_sgs.get(pg.name)
         if sgs:
             return sgs
+        description = pg.description
+        if ':' in description:
+            network_id, description = description.split(':', 1)
 
-        sgs = pg.description.split(',')
+        sgs = description.split(',')
         if len(sgs[0]) == 36:
             return sgs
         else:
             sg_binding_sgid = sg_db.SecurityGroupPortBinding.security_group_id
             constraints=[sg_binding_sgid.startswith(sg_prefix)
                          for sg_prefix in sgs]
-            for t in self._get_active_security_group_tuples(
+            for _, t in self._get_active_security_group_tuples(
                     self.context, constraints=or_(*constraints)):
                 if len(t) == len(sgs):
                     self._pg_to_sgs[pg.name] = t
@@ -177,10 +181,11 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
     @enginefacade.reader
     def _setup_port_groups(self, context, security_group_ids=None):
         local_security_groups = set()
-        for security_groups in self._get_active_security_group_tuples(
+        for network_id, security_groups in self._get_active_security_group_tuples(
                 context, security_group_ids=security_group_ids):
-            sg_set = sg_util.security_group_set({'security_groups':
-                                                     security_groups})
+            sg_set = sg_util.security_group_set(
+                {'network_id': network_id,
+                 'security_groups': security_groups})
             for dvs_uuid, dvs in six.iteritems(self.v_center.uuid_dvs_map):
                 dvs.port_group_added.add(self._port_group_added_callback)
                 dvs.port_group_removed.add(self._port_group_removed_callback)
@@ -190,7 +195,9 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                     sg = self._get_security_group_obj(security_group_id)
                     self._pg_to_sgs[port_group_name] = security_groups
                     # We will have to fetch that object later
-                    sg.port_groups_by_dvs[dvs_uuid][port_group_name] = None
+                    pgs = sg.port_groups_by_dvs[dvs_uuid]
+                    if port_group_name not in pgs:
+                        pgs[port_group_name] = None
 
         return local_security_groups
 
@@ -429,10 +436,12 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         security_groups = []
         separator = ','
 
-        query = session.query(
-            distinct(string_agg(sg_binding_sgid, separator, sg_binding_sgid))
+        query = session.query(distinct(
+            string_agg(sg_binding_sgid, separator, sg_binding_sgid)),
+            Port.network_id
             ).join(PortBindingLevel,
                    PortBindingLevel.port_id == sg_binding_port).\
+            join(Port, Port.id == sg_binding_port).\
             filter(PortBindingLevel.host == self.config.host,
                    PortBindingLevel.driver == DVS,
                    PortBindingLevel.segment_id.isnot(None),  # Unbound ports
@@ -452,8 +461,9 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                    ).subquery()
             query = query.filter(sg_binding_port.in_(subquery))
 
-        for sgs, in query.group_by(sg_binding_port):
-            security_groups.append(sgs.split(separator))
+        for sgs, network_id in query.group_by(Port.network_id,
+                                               sg_binding_port):
+            security_groups.append((network_id, sgs.split(separator)))
 
         return security_groups
 

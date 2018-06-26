@@ -257,7 +257,8 @@ class EgressRule(TrafficRuleBuilder):
 class DropAllRule(TrafficRuleBuilder):
     action = vim.DvsDropNetworkRuleAction
 
-def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
+def compile_filter_policy(sg_rules=None, hashed_rules=None,
+                          filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
     rules = []
@@ -299,10 +300,13 @@ def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=No
     return builder.filter_policy(rules, filter_config_key=filter_config_key)
 
 
-def port_configuration(port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
+def port_configuration(port_key, sg_rules=None, hashed_rules=None,
+                       version=None, filter_config_key=None):
     setting = vim.VMwareDVSPortSetting()
-    setting.filterPolicy = compile_filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
-                                                 filter_config_key=filter_config_key)
+    setting.filterPolicy = compile_filter_policy(
+        sg_rules=sg_rules,
+        hashed_rules=hashed_rules,
+        filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
 
@@ -396,19 +400,26 @@ def security_group_set(port):
         LOG.warning("No security groups for port %s", port['id'])
         return None
 
+    network_id = port.get('network_id')
+    if not network_id:
+        LOG.warning("No network for port %s", port['id'])
+        return None
+
     # There are 36 chars to a uuid, and in the description fits 255 chars
+    # The first 37 chars will be used for the network id, though
     security_groups = sorted(security_groups)
     num_groups = len(security_groups)
-    if num_groups < 7:  # Up to 6 fit in full length
-        return ",".join(security_groups)
-    elif num_groups < 13:  # Up to twelve in split in the "middle"
-        return ",".join([g[:18] for g in security_groups])
-    elif num_groups < 28:
-        return ",".join([g[:8] for g in security_groups])
+    if num_groups < 5:  # Up to 5 fit in full length
+        sgs = ",".join(security_groups)
+    elif num_groups < 12:  # Up to eleven in split in the "middle"
+        sgs = ",".join([g[:18] for g in security_groups])
+    elif num_groups < 25:
+        sgs = ",".join([g[:8] for g in security_groups])
+    else:
+        LOG.warning("Too many security groups for port %s", port['id'])
+        return None
 
-    LOG.warning("Too many security groups for port %s", port['id'])
-    return None
-
+    return ":".join([network_id, sgs])
 
 def apply_rules(rules, sg_aggr, decrement=False):
     """
