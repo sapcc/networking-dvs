@@ -12,7 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-import weakref
 from collections import defaultdict, Counter
 
 import attr
@@ -141,7 +140,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         for sg_id in sg_ids:
             sg = self._get_security_group_obj(sg_id)
             LOG.debug("Storing %s for security-group %s", pg.name, sg_id)
-            sg.port_groups_by_dvs[dvs.uuid][pg.name] = weakref.ref(pg)
+            sg.port_groups_by_dvs[dvs.uuid][pg.name] = pg
             if sg_id not in self._to_refresh:
                 self._to_refresh[sg_id] = now
 
@@ -250,8 +249,8 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                             pass
                     else:
                         try:
-                            port_group = weakref.ref(dvs.get_portgroup_by_name(
-                                pg_name, refresh_if_missing=once))
+                            port_group = dvs.get_portgroup_by_name(
+                                pg_name, refresh_if_missing=once)
                             port_groups[pg_name] = port_group
                             to_configure.add((dvs,
                                               pg_name,
@@ -268,7 +267,6 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                             continue
 
         for dvs, pg_name, port_group in to_configure:
-            port_group = port_group()
             if not port_group:
                 sg_ids = self._pg_to_sgs.get(pg_name)
                 if not sg_ids:
