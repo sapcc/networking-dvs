@@ -470,9 +470,12 @@ class DVSController(object):
 
         ports_by_port_group = defaultdict(list)
         for update_spec in update_specs:
-            port_group = self.get_port_group_for_port(
-                self.ports_by_key[update_spec.key])
-            ports_by_port_group[port_group].append(update_spec)
+            port = self.ports_by_key.get(update_spec.key)
+            if port:
+                port_group = self.get_port_group_for_port(port)
+                ports_by_port_group[port_group].append(update_spec)
+            else:
+                LOG.debug("Port with key %s gone", update_spec.key)
 
         for port_group, pg_update_specs in six.iteritems(ports_by_port_group):
             old_task = port_group.task if port_group else None
@@ -517,7 +520,9 @@ class DVSController(object):
                 for port_info in self.get_port_info_by_portkey(
                         [spec.key for spec in update_specs]):
                     port_key = str(port_info.key)
-                    port = self.ports_by_key[port_key]
+                    port = self.ports_by_key.get(port_key)
+                    if not port:
+                        continue
                     port_desc = port['port_desc']
                     update_spec_index = None
                     update_spec = None
