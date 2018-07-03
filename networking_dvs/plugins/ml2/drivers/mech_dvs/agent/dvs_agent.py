@@ -484,11 +484,10 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
 
         port_config = vim.VMwareDVSPortSetting(
             vlan=builder.vlan(segmentation_id),
-            filterPolicy=builder.filter_policy(None)
         )
 
         port_group = dvs.create_dvportgroup(port_group_name, port_config,
-                                            description=sg_set, update=False)
+                                            description=sg_set, update=True)
         return dvs, port_group
 
     def _reassign_port_async(self, port, task=None):

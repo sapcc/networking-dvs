@@ -114,7 +114,8 @@ def _config_differs(current, update):
         try:
             new_value = getattr(update, name)
 
-            if not new_value or hasattr(new_value, 'inherited') and new_value.inherited is None:
+            if not new_value or hasattr(new_value, 'inherited') \
+                    and new_value.inherited is None:
                 continue
 
             if isinstance(value, list):
@@ -629,9 +630,10 @@ class DVSController(object):
                 self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
                 self._property_collector.CreateFilter(self._port_group_spec_set(), partialUpdates=False)
 
-            options = vmodl.query.PropertyCollector.WaitOptions(maxObjectUpdates=max_objects, maxWaitSeconds=0)
-            update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
-                                                                   options=options)
+            options = vmodl.query.PropertyCollector.WaitOptions(
+                maxObjectUpdates=max_objects, maxWaitSeconds=0)
+            update_set = self._property_collector.WaitForUpdatesEx(
+                version=self._property_collector_version, options=options)
 
             while update_set:
                 self._property_collector_version = update_set.version
@@ -654,13 +656,14 @@ class DVSController(object):
                                 if 'config.description':
                                     pg.description = props['description']
                             else:
-                                pg = PortGroup(ref=update.obj,
-                                               key=props.get('key') or update.obj.key,
-                                               name=props.get('name'),
-                                               description=props.pop("config.description", ""),
-                                               config_version=props.pop("config.configVersion", None),
-                                               default_port_config=props.pop("config.defaultPortConfig", None),
-                                               )
+                                pg = PortGroup(
+                                    ref=update.obj,
+                                    key=props.get('key') or update.obj.key,
+                                    name=props.get('name'),
+                                    description=props.pop("config.description", ""),
+                                    config_version=props.pop("config.configVersion", None),
+                                    default_port_config=props.pop("config.defaultPortConfig", None),
+                                )
                             self._store_port_group(pg)
 
                 update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
@@ -707,10 +710,12 @@ class DVSController(object):
             wait_for_task(pg_create_task, si=self.connection)
             pg_ref = pg_create_task.info.result
 
-            props = util.get_object_properties_dict(self.connection, pg_ref, ["key"])
+            props = util.get_object_properties_dict(self.connection, pg_ref,
+                                                    ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
-            LOG.debug("Creating portgroup {} took {} seconds.".format(name, delta.seconds))
+            LOG.debug("Creating portgroup {} took {} seconds.".format(
+                name, delta.seconds))
 
             pg = PortGroup(
                 key=props['key'],
@@ -759,7 +764,8 @@ class DVSController(object):
             if (not name or name == pg.name) \
                     and (default_port_config or not port_config) \
                     and not _config_differs(default_port_config, port_config):
-                LOG.debug("Skipping update: No changes to known config on %s", pg.name)
+                LOG.debug("Skipping update: No changes to known config on %s",
+                          pg.name)
                 return
 
             try:

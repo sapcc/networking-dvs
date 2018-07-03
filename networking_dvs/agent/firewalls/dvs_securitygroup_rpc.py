@@ -350,17 +350,10 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         if not port_group or not port_group.ports:
             return None
 
-        ports = six.viewvalues(port_group.ports)
-
-        # Ensure that we do not set a default,
-        # if any port is not configured yet individually
-        if not all(port.get('port_desc')
-                   and port.get('port_desc').vlan_id for port in ports):
-            return None
-
+        ports = six.itervalues(port_group.ports)
         vlans = Counter(port.get('segmentation_id') for port in ports)
 
-        if None in vlans:
+        if not vlans:
             return None
 
         return vim.dvs.VmwareDistributedVirtualSwitch.VlanIdSpec(
