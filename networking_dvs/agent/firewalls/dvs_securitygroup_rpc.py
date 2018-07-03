@@ -226,7 +226,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                 referenced.dependent_groups.add(sg_id)
             for ref_id in old_source_groups - current_source_groups:
                 referenced = self._get_security_group_obj(ref_id)
-                referenced.dependent_groups.pop(sg_id)
+                referenced.dependent_groups.discard(sg_id)
             sg.security_group_source_groups = current_source_groups
 
             sg.rules = sg_util.patch_sg_rules(rules['security_group_rules'])
