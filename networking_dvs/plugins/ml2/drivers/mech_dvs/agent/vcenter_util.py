@@ -166,7 +166,7 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
 class VCenterMonitor(object):
     def __init__(self, vc_api, config, connection=None, quit_event=None, pool=None):
         self._quit_event = quit_event or Event()
-        self.changed = set()
+        self.changed = dict()
         self._property_collector = None
         self.down_ports = {}
         self.untried_ports = {}  # The host is simply down
@@ -221,8 +221,8 @@ class VCenterMonitor(object):
                                 if isinstance(update.obj, vim.VirtualMachine):
                                     self._handle_virtual_machine(update, now)
 
-                    changed = self.changed
-                    self.changed = set()
+                    changed = self.changed.values()
+                    self.changed = dict()
                     if changed:
                         self.vcenter_api.vcenter_port_changes(changed)
 
@@ -306,7 +306,7 @@ class VCenterMonitor(object):
                                                  port_desc.port_key))
                 self.down_ports.pop(mac_address, None)
                 self.untried_ports.pop(mac_address, None)
-                self.changed.add(port_desc)
+                self.changed[id(port_desc)] = port_desc
 
     def _handle_virtual_machine(self, update, now):
         vmobref = str(update.obj._moId) # String 'vmobref-#'
@@ -415,21 +415,21 @@ class VCenterMonitor(object):
                 mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
-                LOG.debug("Port {} {} was down for {} ({})".format(
+                LOG.debug("Port {} {} {} was down for {} ({})".format(
                     mac_address, port_desc.port_key,
                     (now - then).total_seconds(),
                     (self.iteration - iteration)))
-            elif not port_desc in self.changed:
-                LOG.debug("Port {} {} came up connected".format(
+            else:
+                LOG.debug("Update to connected port {} {}".format(
                     mac_address, port_desc.port_key))
             port_desc.connected_since = now
-            self.changed.add(port_desc)
+            self.changed[id(port_desc)] = port_desc
         else:
             power_state = self._hardware_map[port_desc.vmobref].get(
                 'power_state', None)
             if power_state != 'poweredOn':
                 self.untried_ports[mac_address] = port_desc
-            elif not port_desc in self.down_ports:
+            elif not mac_address in self.down_ports:
                 status = port_desc.status
                 LOG.debug(
                     "Port {} {} registered as down: {} {}".format(
