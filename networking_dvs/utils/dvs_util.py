@@ -141,6 +141,16 @@ def _config_differs(current, update):
     return False
 
 
+def _merge_config(current, update):
+    if not current:
+        return update
+
+    for name, value in six.iteritems(update.__dict__):
+        setattr(current, name, value)
+
+    return current
+
+
 @attr.s(**dvs_const.ATTR_ARGS)
 class PortGroup(object):
     ref = attr.ib()
@@ -217,7 +227,8 @@ class DVSController(object):
             try:
                 for pg in six.itervalues(self._port_groups_by_ref):
                     try:
-                        if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
+                        if pg.ports or not pg.name.endswith(suffix) \
+                                or pg.ref.vm:
                             countdown.pop(pg.ref._moId, None)
                         else:
                             value = countdown[pg.ref._moId]
@@ -263,7 +274,7 @@ class DVSController(object):
                     old_port_group.ports.pop(port_desc.mac_address, None)
             port_desc.port_group_history = []
 
-        # assert('port_desc' not in port or port['port_desc'] == port_desc or )
+        # assert('port_desc' not in port or port['port_desc'] == port_desc or)
         port['port_desc'] = port_desc
         port['binding:vif_details'] = {'dvs_port_key': port_desc.port_key,
                                        'dvs_uuid': port_desc.dvs_uuid,
@@ -586,12 +597,15 @@ class DVSController(object):
                 else:
                     for attr in ['configVersion', 'description', 'name']:
                         value = getattr(spec, attr, None)
-                        if not value is None and value != getattr(existing_spec, attr, None):
+                        if not value is None and \
+                                value != getattr(existing_spec, attr, None):
                             setattr(existing_spec, attr, value)
                     for attr in ['blocked', 'filterPolicy', 'vlan']:
                         value = getattr(spec.setting, attr)
                         if not value.inherited is None:
-                            setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
+                            setattr(existing_spec.setting, attr,
+                                    getattr(spec.setting, attr))
+
         return callbacks, update_specs_by_key.values()
 
     def get_port_group_for_security_group_set(self, security_group_set):
@@ -627,8 +641,10 @@ class DVSController(object):
         with lock(self.uuid):
             """Get all port groups on the switch"""
             if self._property_collector is None:
-                self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
-                self._property_collector.CreateFilter(self._port_group_spec_set(), partialUpdates=False)
+                pc = self.connection.content.propertyCollector
+                self._property_collector = pc.CreatePropertyCollector()
+                self._property_collector.CreateFilter(
+                    self._port_group_spec_set(), partialUpdates=False)
 
             options = vmodl.query.PropertyCollector.WaitOptions(
                 maxObjectUpdates=max_objects, maxWaitSeconds=0)
@@ -637,43 +653,53 @@ class DVSController(object):
 
             while update_set:
                 self._property_collector_version = update_set.version
-                if update_set.filterSet and update_set.filterSet[0].objectSet:
-                    for update in update_set.filterSet[0].objectSet:
-                        if update.kind == 'leave':
-                            pg = self._port_groups_by_ref.get(update.obj._moId)
-                            self._remove_port_group(pg)
-                        else:
-                            # update.obj
-                            props = {prop.name: prop.val for prop in update.changeSet}
-                            pg = self._port_groups_by_ref.get(update.obj)
+                self._parse_port_group_updates(update_set)
 
-                            if pg:  # Update
-                                self._remove_port_group(pg)
-                                if 'name' in props:
-                                    pg.name = props['name']
-                                if 'key' in props:  # Should never change, but hey...
-                                    pg.name = props['key']
-                                if 'config.description':
-                                    pg.description = props['description']
-                            else:
-                                pg = PortGroup(
-                                    ref=update.obj,
-                                    key=props.get('key') or update.obj.key,
-                                    name=props.get('name'),
-                                    description=props.pop("config.description", ""),
-                                    config_version=props.pop("config.configVersion", None),
-                                    default_port_config=props.pop("config.defaultPortConfig", None),
-                                )
-                            self._store_port_group(pg)
+                update_set = self._property_collector.WaitForUpdatesEx(
+                    version=self._property_collector_version,
+                    options=options)
 
-                update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
-                                                                       options=options)
+    def _parse_port_group_updates(self, update_set):
+        if not update_set.filterSet or not update_set.filterSet[0].objectSet:
+            return
+
+        for update in update_set.filterSet[0].objectSet:
+            if update.kind == 'leave':
+                pg = self._port_groups_by_ref.get(update.obj._moId)
+                self._remove_port_group(pg)
+            else:
+                # update.obj
+                props = {prop.name: prop.val for prop in update.changeSet}
+                pg = self._port_groups_by_ref.get(update.obj)
+
+                if pg:  # Update
+                    self._remove_port_group(pg)
+                    if 'name' in props:
+                        pg.name = props['name']
+                    if 'key' in props:  # Should never change, but hey...
+                        pg.name = props['key']
+                    if 'config.description':
+                        pg.description = props['description']
+                else:
+                    pg = PortGroup(
+                        ref=update.obj,
+                        key=props.get('key') or update.obj.key,
+                        name=props.get('name'),
+                        description=props.pop("config.description", ""),
+                        config_version=props.pop("config.configVersion",
+                                                 None),
+                        default_port_config=props.pop(
+                            "config.defaultPortConfig", None),
+                    )
+                self._store_port_group(pg)
 
     @stats.timed()
-    def create_dvportgroup(self, name, port_config, description=None, update=True):
+    def create_dvportgroup(self, name, port_config,
+                           description=None, update=True):
         """
         Creates an automatically-named dvportgroup on the dvswitch
-        with the specified sg rules and marks it as such through the description
+         with the specified sg rules and marks it as such through the
+         description
 
         Returns a portgroup object.
 
@@ -728,13 +754,15 @@ class DVSController(object):
             self._store_port_group(pg)
             return pg
         except vim.fault.DuplicateName:
-            LOG.info("Untagged port-group with matching name {} found, will update and use.".format(name))
+            LOG.info(("Untagged port-group with matching name {} found, "
+                      "will update and use.").format(name))
 
             if name not in self._port_groups_by_name:
                 self._sync_port_groups()
 
             if name not in self._port_groups_by_name:
-                LOG.error("Port-group with matching name {} not found while expected.".format(name))
+                LOG.error(("Port-group with matching name {}"
+                           " not found while expected.").format(name))
                 return
 
             existing = self._port_groups_by_name[name]
@@ -777,12 +805,14 @@ class DVSController(object):
 
                 now = timeutils.utcnow()
                 if not CONF.AGENT.dry_run:
-                    pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                    pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(
+                        spec=pg_spec)
                 else:
                     LOG.debug(pg_spec)
 
                 pg.config_version = str(int(pg.config_version) + 1)
-                pg.default_port_config = port_config
+                pg.default_port_config = _merge_config(default_port_config,
+                                                       port_config)
 
                 if not CONF.AGENT.dry_run:
                     wait_for_task(pg_update_task, si=self.connection)
@@ -821,7 +851,8 @@ class DVSController(object):
                 continue
             host_ref = hf.host
             if host_ref in self.hosts_to_rectify:
-                if time.time() - self.rectify_wait > self.hosts_to_rectify[host_ref]:
+                if time.time() - self.rectify_wait \
+                        > self.hosts_to_rectify[host_ref]:
                     self.hosts_to_rectify[host_ref] = time.time()
                     hosts.add(host_ref)
                 else:
@@ -834,7 +865,8 @@ class DVSController(object):
         if not hosts:
             return
         LOG.debug("Hosts to rectify: {}".format(hosts))
-        return self.connection.content.dvSwitchManager.RectifyDvsOnHost_Task(hosts=list(hosts))
+        dsm = self.connection.content.dvSwitchManager
+        return dsm.RectifyDvsOnHost_Task(hosts=list(hosts))
 
     def switch_port_blocked_state(self, port):
         try:

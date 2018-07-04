@@ -140,8 +140,9 @@ class _DVSPortDesc(object):
                 pass
 
             try:
-                if not setting.filterPolicy.inherited:
-                    values['filter_config_key'] = setting.filterPolicy.filterConfig[0].key
+                fp = setting.filterPolicy
+                if not fp.inherited:
+                    values['filter_config_key'] = fp.filterConfig[0].key
             except AttributeError:
                 pass
 
@@ -316,9 +317,7 @@ class VCenterMonitor(object):
 
         for change in change_set:
             change_name = change.name
-            change_val = getattr(change, "val", None)
-            if not change_val:
-                LOG.debug("Change name {} has no value.".format(change_name))
+            change_val = getattr(change, 'val', None)
             if change_name == 'config.hardware.device':
                 if 'assign' == change.op:
                     for v in change_val:
@@ -400,8 +399,9 @@ class VCenterMonitor(object):
             status=connectable.status if connectable else None,
             vmobref=vmobref,
             device_key=value.key,
+            device_type=value.__class__.__name__.rsplit('.', 1)[-1],
         ))
-        _, port_desc.device_type = value.__class__.__name__.rsplit('.', 1)
+
         return port_desc
 
     def _handle_port_update(self, port_desc, now):
@@ -546,8 +546,8 @@ class VCenter(object):
                 self.uuid_port_map[port_id] = port_info
                 port_list.append(port_info)
             else:
-                LOG.warn("Missing port %s for port_info %s",
-                         port_id, mac_address)
+                LOG.warning("Missing port %s for port_info %s",
+                            port_id, mac_address)
 
         if macs:
             LOG.warning(_LW("Could not find the following macs: %s"), macs)
