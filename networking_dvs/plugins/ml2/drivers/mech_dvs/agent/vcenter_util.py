@@ -311,46 +311,61 @@ class VCenterMonitor(object):
     def _handle_virtual_machine(self, update, now):
         vmobref = str(update.obj._moId) # String 'vmobref-#'
         change_set = getattr(update, 'changeSet', [])
+        vm_hw = self._hardware_map[vmobref]
 
-        if update.kind != 'leave':
-            vm_hw = self._hardware_map[vmobref]
+        last_port_desc = None
 
         for change in change_set:
-            change_name = change.name
-            change_val = getattr(change, 'val', None)
-            if change_name == 'config.hardware.device':
-                if 'assign' == change.op:
-                    for v in change_val:
-                        port_desc = self._port_desc_from_nic_change(vmobref, v)
-                        if port_desc:
-                            vm_hw[port_desc.device_key] = port_desc
-                            self._handle_port_update(port_desc, now)
-                elif 'indirectRemove' == change.op:
-                    self._handle_removal(vmobref)
-            elif change_name.startswith('config.hardware.device['):
-                id_end = change_name.index(']')
-                device_key = int(change_name[23:id_end])
-                if 'remove' == change.op:
-                    vm_hw.pop(device_key, None)
-                    continue
+            port_desc = self._handle_virtual_machine_change(
+                change, vm_hw, vmobref)
+            if port_desc:
+                if id(last_port_desc) != id(port_desc):
+                    self._handle_port_update(last_port_desc, now)
+                    last_port_desc = port_desc
+
+        if last_port_desc:
+            self._handle_port_update(last_port_desc, now)
+
+        if update.kind == 'leave':
+            self._handle_removal(vmobref)
+
+    def _handle_virtual_machine_change(self, change, vm_hw, vmobref):
+        change_name = change.name
+        change_val = getattr(change, 'val', None)
+        if change_name == 'config.hardware.device':
+            if 'assign' == change.op:
+                for v in change_val:
+                    port_desc = self._port_desc_from_nic_change(vmobref, v)
+                    if port_desc:
+                        vm_hw[port_desc.device_key] = port_desc
+                        return port_desc
+            elif 'indirectRemove' == change.op:
+                self._handle_removal(vmobref)
+        elif change_name.startswith('config.hardware.device['):
+            id_end = change_name.index(']')
+            device_key = int(change_name[23:id_end])
+            if 'remove' == change.op:
+                vm_hw.pop(device_key, None)
+            else:
                 # assume that change.op is assign
                 port_desc = vm_hw.get(device_key, None)
                 if port_desc:
                     attribute = change_name[id_end + 2:]
                     if 'connectable.connected' == attribute:
                         port_desc.connected = change_val
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
                     elif 'connectable.status' == attribute:
                         port_desc.status = change_val
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
                     elif 'macAddress' == attribute:
                         port_desc.mac_address = str(change_val)
+                        return port_desc
                     elif 'backing.port.connectionCookie' == attribute:
                         port_desc.connection_cookie = str(change_val)
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
                     elif 'backing.port.portKey' == attribute:
                         port_desc.port_key = str(change_val)
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
                     elif 'backing.port.portgroupKey' == attribute:
                         change_val = str(change_val)
                         pgh = port_desc.port_group_history
@@ -360,27 +375,22 @@ class VCenterMonitor(object):
                         port_desc.port_group_history = [
                             key for key in pgh if key != change_val]
                         port_desc.port_group_key = change_val
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref,
                                                                 change_val)
                     if port_desc:
                         vm_hw[port_desc.device_key] = port_desc
-                        self._handle_port_update(port_desc, now)
+                        return port_desc
 
-            elif change_name == 'runtime.powerState':
-                # print("{}: {}".format(vm, change_val))
-                vm_hw['power_state'] = change_val
-                for port_desc in six.itervalues(vm_hw):
-                    if isinstance(port_desc, _DVSPortMonitorDesc):
-                        self._handle_port_update(port_desc, now)
-            else:
-                LOG.debug(change)
-
-        if update.kind == 'leave':
-            self._handle_removal(vmobref)
+        elif change_name == 'runtime.powerState':
+            # print("{}: {}".format(vm, change_val))
+            vm_hw['power_state'] = change_val
+            for port_desc in six.itervalues(vm_hw):
+                if isinstance(port_desc, _DVSPortMonitorDesc):
+                    return port_desc
         else:
-            pass
+            LOG.debug(change)
 
     def _port_desc_from_nic_change(self, vmobref, value):
         backing = getattr(value, 'backing', None)
@@ -405,6 +415,9 @@ class VCenterMonitor(object):
         return port_desc
 
     def _handle_port_update(self, port_desc, now):
+        if not port_desc:
+            return
+
         mac_address = port_desc.mac_address
 
         if not mac_address:
