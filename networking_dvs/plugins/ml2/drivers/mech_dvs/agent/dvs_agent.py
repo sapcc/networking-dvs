@@ -56,6 +56,7 @@ from networking_dvs.utils import dvs_util
 from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.utils import spec_builder as builder
 from pyVmomi import vim
+from pyVmomi import vmodl
 from pyVim.task import WaitForTask as wait_for_task
 
 LOG = logging.getLogger(__name__)
@@ -530,17 +531,22 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             LOG.debug("Reassign: %s", vm_config_spec)
         else:
             task = reconfigure_vm(vm_ref, vm_config_spec)
-            wait_for_task(task)
-            # The task will complete _after_ the corresponding event been
-            # issued to the collector, so we should be here not waiting more
-            # than some fractions of a second
-            for _ in six.moves.range(10):
-                port_desc = port['port_desc']
-                if port_desc.port_group_key == port_group.key:
-                    # stats.timing('networking_dvs.ports.reassigned',
-                    #             port_desc.firewall_end)
+            for i in six.moves.range(3):
+                try:
+                    wait_for_task(task)
+                    # The task will complete _after_ the corresponding event
+                    # been issued to the collector, so we should be here not
+                    # waiting more than some fractions of a second
+                    for j in six.moves.range(10):
+                        port_desc = port['port_desc']
+                        if port_desc.port_group_key == port_group.key:
+                            # stats.timing('networking_dvs.ports.reassigned',
+                            #             port_desc.firewall_end)
+                            break
+                        eventlet.sleep(0.1)
                     break
-                eventlet.sleep(0.1)
+                except vmodl.fault.SystemError:
+                    LOG.exception("Failed to re-assign port")
 
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (
