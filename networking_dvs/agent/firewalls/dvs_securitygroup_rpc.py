@@ -69,10 +69,8 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         self.config = config
         self._security_groups = dict()  # id -> SecurityGroup
         self._portgroup_to_security_groups = dict()
-        provider_rules = {'network_id': None, 'security_group_rules': [], 'fixed_ips': [ANY_IPV6]}
-        self._add_ingress_ra_rule(provider_rules)
-        dhcp_provider_rules = {'network_id': None, 'security_group_rules': [], 'fixed_ips': [ANY_IPV4, ANY_IPV6]}
-        self._add_ingress_dhcp_rule(dhcp_provider_rules)
+        provider_rules = {'network_id': None, 'security_group_rules': [], 'fixed_ips': []}
+        self._apply_provider_rule(context, dict(sg=provider_rules))
         self._provider_rules = sg_util.patch_sg_rules(provider_rules['security_group_rules'])
         self._to_refresh = set()
         self._update_security_groups(self.context)
