@@ -34,7 +34,6 @@ from oslo_service import eventlet_backdoor
 from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 
-import neutron.context
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config
@@ -42,6 +41,7 @@ from neutron.common import topics
 from neutron.common import constants as n_const
 from neutron.common import utils as neutron_utils
 from neutron.common import profiler
+from neutron import context as neutron_context
 from neutron.i18n import _LI, _LW, _LE
 from neutron.api.rpc.handlers import securitygroups_rpc
 
@@ -100,7 +100,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         # Start small, so we identify possible bottlenecks
         self.pool = eventlet.greenpool.GreenPool(size=10)
         self.conf = conf or CONF
-        self.context = neutron.context.get_admin_context()
+        self.context = neutron_context.get_admin_context()
 
         network_maps = neutron_utils.parse_mappings(
             self.conf.ML2_VMWARE.network_maps)

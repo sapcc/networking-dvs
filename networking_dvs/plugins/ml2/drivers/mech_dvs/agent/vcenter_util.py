@@ -29,10 +29,10 @@ import six
 from collections import defaultdict
 
 from neutron.i18n import _LI, _LW, _LE
+from neutron import context as neutron_context
 from neutron.db import models_v2
 from neutron.db import securitygroups_db as sg_db
 from neutron.plugins.ml2 import models as models_ml2
-import neutron.context
 
 from oslo_log import log
 from oslo_utils.timeutils import utcnow
@@ -485,7 +485,7 @@ class VCenter(object):
             self.network_dvs_map[network] = dvs
             self.uuid_dvs_map[dvs.uuid] = dvs
 
-        context = neutron.context.get_admin_context()
+        context = neutron_context.get_admin_context()
         for port in self._get_agent_ports(context):
             physical_network = port['physical_network']
             port_id = port['id']
@@ -548,7 +548,7 @@ class VCenter(object):
                 port_list.append(port)
                 macs.discard(mac)
 
-        context = neutron.context.get_admin_context()
+        context = neutron_context.get_admin_context()
         for neutron_info in self._get_ports_by_mac(context, macs):
             mac_address = neutron_info['mac_address']
             port_id = neutron_info['port_id']
