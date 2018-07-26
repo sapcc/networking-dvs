@@ -28,6 +28,9 @@ from oslo_log import log
 from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
+from pyVim.connect import SmartStubAdapter
+from pyVim.connect import VimSessionOrientedStub
+
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
 from requests.exceptions import ConnectionError
@@ -37,8 +40,13 @@ from networking_dvs.common import constants as dvs_const
 from networking_dvs.common import exceptions
 from networking_dvs.common.util import stats, optional_attr
 from networking_dvs.utils import spec_builder as builder
-from neutron_lib.utils import helpers
-from neutron._i18n import _
+
+try:
+    from neutron._i18n import _
+    from neutron_lib.utils.helpers import parse_mappings
+except ImportError:
+    from neutron.common.utils import parse_mappings
+    from neutron.i18n import _LI as _
 
 LOG = log.getLogger(__name__)
 
@@ -111,7 +119,8 @@ def _config_differs(current, update):
         try:
             new_value = getattr(update, name)
 
-            if not new_value or hasattr(new_value, 'inherited') and new_value.inherited is None:
+            if not new_value or hasattr(new_value, 'inherited') \
+                    and new_value.inherited is None:
                 continue
 
             if isinstance(value, list):
@@ -137,22 +146,36 @@ def _config_differs(current, update):
     return False
 
 
+def _merge_config(current, update):
+    if not current:
+        return update
+
+    for name, value in six.iteritems(update.__dict__):
+        setattr(current, name, value)
+
+    return current
+
+
 @attr.s(**dvs_const.ATTR_ARGS)
 class PortGroup(object):
-    __weakref__ = attr.ib(init=False, hash=False, repr=False, cmp=False)
     ref = attr.ib()
     key = attr.ib(convert=str)
     name = attr.ib(convert=str)
     description = attr.ib(convert=str)
-    config_version = attr.ib(default=None, convert=optional_attr(str), hash=False,
-                             cmp=False)  # Actually an int, but represented as a string
-    default_port_config = attr.ib(default=None, hash=False, repr=False, cmp=False)
+    # config_version: Actually an int, but represented as a string
+    config_version = attr.ib(
+        default=None, convert=optional_attr(str), hash=False, cmp=False)
+    default_port_config = attr.ib(
+        default=None, hash=False, repr=False, cmp=False)
     task = attr.ib(default=None, hash=False, repr=False, cmp=False)
-    ports = attr.ib(default=attr.Factory(dict), hash=False, cmp=False)  # mac-address -> port
+    ports = attr.ib(
+        default=attr.Factory(dict),
+        hash=False, cmp=False)  # mac-address -> port
 
     def fetch(self, connection):
         result = util.get_object_properties_dict(connection, self.ref,
-                                                 ['config.configVersion', 'config.defaultPortConfig'])
+                                                 ['config.configVersion',
+                                                  'config.defaultPortConfig'])
         self.config_version = result.pop('config.configVersion', None)
         self.default_port_config = result.pop('config.defaultPortConfig', None)
 
@@ -161,7 +184,8 @@ class PortGroup(object):
 class DVSController(object):
     """Controls one DVS."""
 
-    def __init__(self, dvs_name, connection=None, pool=None, rectify_wait=120, quit_event=None):
+    def __init__(self, dvs_name, connection=None, pool=None,
+                 rectify_wait=120, quit_event=None):
         super(DVSController, self).__init__()
         self.connection = connection
         self.dvs_name = dvs_name
@@ -208,7 +232,8 @@ class DVSController(object):
             try:
                 for pg in six.itervalues(self._port_groups_by_ref):
                     try:
-                        if pg.ports or not pg.name.endswith(suffix) or pg.ref.vm:
+                        if pg.ports or not pg.name.endswith(suffix) \
+                                or pg.ref.vm:
                             countdown.pop(pg.ref._moId, None)
                         else:
                             value = countdown[pg.ref._moId]
@@ -254,7 +279,7 @@ class DVSController(object):
                     old_port_group.ports.pop(port_desc.mac_address, None)
             port_desc.port_group_history = []
 
-        # assert('port_desc' not in port or port['port_desc'] == port_desc or )
+        # assert('port_desc' not in port or port['port_desc'] == port_desc or)
         port['port_desc'] = port_desc
         port['binding:vif_details'] = {'dvs_port_key': port_desc.port_key,
                                        'dvs_uuid': port_desc.dvs_uuid,
@@ -288,7 +313,8 @@ class DVSController(object):
         if max_mtu == self._max_mtu:
             return
         try:
-            pg_config_info = vim.VMwareDVSConfigSpec(maxMtu=max_mtu, configVersion=self._config_version)
+            pg_config_info = vim.VMwareDVSConfigSpec(
+                maxMtu=max_mtu, configVersion=self._config_version)
             pg_update_task = self._dvs.ReconfigureDvs_Task(spec=pg_config_info)
 
             wait_for_task(pg_update_task, si=self.connection)
@@ -345,7 +371,8 @@ class DVSController(object):
             listener(self, pg)
 
     def update_network(self, network, original=None):
-        original_name = self._get_net_name(self.dvs_name, original) if original else None
+        original_name = self._get_net_name(self.dvs_name, original) \
+            if original else None
         current_name = self._get_net_name(self.dvs_name, network)
         blocked = not network['admin_state_up']
         try:
@@ -361,7 +388,8 @@ class DVSController(object):
                     pg_config_info.configVersion,
                     blocked=blocked)
                 pg_spec.name = current_name
-                pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(
+                    spec=pg_spec)
 
                 wait_for_task(pg_update_task, si=self.connection)
                 LOG.info(_('Network %(name)s updated'),
@@ -389,7 +417,9 @@ class DVSController(object):
             return True
         except vim.fault.ResourceInUse as e:
             if ignore_in_use:
-                LOG.info(_("Could not delete port-group %(name)s. Reason: %(message)s")
+                LOG.info(_(
+                    "Could not delete port-group %(name)s. "
+                    "Reason: %(message)s")
                          % {'name': pg.name, 'message': e.message})
                 return False
             else:
@@ -407,17 +437,20 @@ class DVSController(object):
         if not update_specs:
             return
 
-        LOG.debug("Update Ports: {}".format(sorted([spec.name for spec in update_specs])))
+        LOG.debug("Update Ports: {}".format(
+            sorted([spec.name for spec in update_specs])))
         update_task = self.submit_update_ports(update_specs)
         try:
-            wait_for_task(update_task, si=self.connection)  # -> May raise DvsOperationBulkFault, when host is down
+            # May raise DvsOperationBulkFault, when host is down
+            wait_for_task(update_task, si=self.connection)
             return update_task.info.result
         except vim.fault.NotFound:
             return
 
     def queue_update_specs(self, update_specs, callback=None):
         self._update_spec_queue.append((update_specs, [callback]))
-        stats.gauge('networking_dvs.update_spec_queue_length', len(self._update_spec_queue))
+        stats.gauge('networking_dvs.update_spec_queue_length',
+                    len(self._update_spec_queue))
 
     def filter_update_specs(self, filter_func):
         self._update_spec_queue = [
@@ -454,16 +487,23 @@ class DVSController(object):
 
         ports_by_port_group = defaultdict(list)
         for update_spec in update_specs:
-            port_group = self.get_port_group_for_port(self.ports_by_key[update_spec.key])
-            ports_by_port_group[port_group].append(update_spec)
+            port = self.ports_by_key.get(update_spec.key)
+            if port:
+                port_group = self.get_port_group_for_port(port)
+                ports_by_port_group[port_group].append(update_spec)
+            else:
+                LOG.debug("Port with key %s gone", update_spec.key)
 
         for port_group, pg_update_specs in six.iteritems(ports_by_port_group):
             old_task = port_group.task if port_group else None
-            task = spawn(self._apply_queued_update_specs, pg_update_specs, callbacks, sync=old_task)
+            task = spawn(self._apply_queued_update_specs,
+                         pg_update_specs, callbacks, sync=old_task)
             if port_group:
                 port_group.task = task
 
-    def _apply_queued_update_specs(self, update_specs, callbacks, retries=5, sync=None):
+    def _apply_queued_update_specs(self,
+                                   update_specs,
+                                   callbacks, retries=5, sync=None):
         if not update_specs:
             return
 
@@ -479,7 +519,8 @@ class DVSController(object):
                     port = self.ports_by_key.get(spec.key)
                     port_desc = port and port.get('port_desc')
                     if port_desc and port_desc.config_version:
-                        port_desc.config_version = str(int(port_desc.config_version) + 1)
+                        port_desc.config_version = str(
+                            int(port_desc.config_version) + 1)
 
                 if callbacks:
                     succeeded_keys = [str(spec.key) for spec in update_specs]
@@ -489,12 +530,16 @@ class DVSController(object):
 
                 return value
             except (vim.fault.DvsOperationBulkFault, vim.fault.NoHost) as e:
-                # We log it as error, but do not fail, so that the agent doesn't have to restart
+                # We log it as error, but do not fail, so that the agent
+                # doesn't have to restart
                 LOG.error("Failed to apply changes due to: %s", e.msg)
             except vim.fault.ConcurrentAccess:
-                for port_info in self.get_port_info_by_portkey([spec.key for spec in update_specs]):
+                for port_info in self.get_port_info_by_portkey(
+                        [spec.key for spec in update_specs]):
                     port_key = str(port_info.key)
-                    port = self.ports_by_key[port_key]
+                    port = self.ports_by_key.get(port_key)
+                    if not port:
+                        continue
                     port_desc = port['port_desc']
                     update_spec_index = None
                     update_spec = None
@@ -505,15 +550,17 @@ class DVSController(object):
                             update_spec_index = index
                             break
 
-                    connection_cookie = getattr(port_info, "connectionCookie", None)
+                    connection_cookie = getattr(port_info,
+                                                "connectionCookie", None)
 
                     if connection_cookie:
                         connection_cookie = str(connection_cookie)
 
                     if connection_cookie != port_desc.connection_cookie:
-                        LOG.error("Cookie mismatch {} {} {} <> {}".format(port_desc.mac_address, port_desc.port_key,
-                                                                          port_desc.connection_cookie,
-                                                                          connection_cookie))
+                        LOG.error("Cookie mismatch {} {} {} <> {}".format(
+                            port_desc.mac_address, port_desc.port_key,
+                            port_desc.connection_cookie,
+                            connection_cookie))
                         if update_spec_index:
                             failed_keys.append(port_key)
                             del update_specs[update_spec_index]
@@ -521,11 +568,12 @@ class DVSController(object):
                         config_version = str(port_info.config.configVersion)
                         port_desc.config_version = config_version
                         if update_spec:
-                            LOG.debug("Config version {} {} from {} ({}) to {}".format(port_desc.mac_address,
-                                                                                       port_desc.port_key,
-                                                                                       port_desc.config_version,
-                                                                                       update_spec.configVersion,
-                                                                                       config_version))
+                            LOG.debug("Config version {} {} from {} ({}) to {}"
+                                      .format(port_desc.mac_address,
+                                              port_desc.port_key,
+                                              port_desc.config_version,
+                                              update_spec.configVersion,
+                                              config_version))
 
                             update_spec.configVersion = config_version
                 continue
@@ -535,7 +583,8 @@ class DVSController(object):
     def _get_queued_update_changes(self):
         callbacks = set()
         # First merge the changes for the same port(key)
-        # Later changes overwrite earlier ones, non-inherited values take precedence
+        # Later changes overwrite earlier ones, non-inherited values
+        # take precedence
         # This cannot be called out-of-order
         update_specs_by_key = {}
         update_spec_queue = self._update_spec_queue
@@ -553,12 +602,15 @@ class DVSController(object):
                 else:
                     for attr in ['configVersion', 'description', 'name']:
                         value = getattr(spec, attr, None)
-                        if not value is None and value != getattr(existing_spec, attr, None):
+                        if not value is None and \
+                                value != getattr(existing_spec, attr, None):
                             setattr(existing_spec, attr, value)
                     for attr in ['blocked', 'filterPolicy', 'vlan']:
                         value = getattr(spec.setting, attr)
                         if not value.inherited is None:
-                            setattr(existing_spec.setting, attr, getattr(spec.setting, attr))
+                            setattr(existing_spec.setting, attr,
+                                    getattr(spec.setting, attr))
+
         return callbacks, update_specs_by_key.values()
 
     def get_port_group_for_security_group_set(self, security_group_set):
@@ -594,51 +646,65 @@ class DVSController(object):
         with lock(self.uuid):
             """Get all port groups on the switch"""
             if self._property_collector is None:
-                self._property_collector = self.connection.content.propertyCollector.CreatePropertyCollector()
-                self._property_collector.CreateFilter(self._port_group_spec_set(), partialUpdates=False)
+                pc = self.connection.content.propertyCollector
+                self._property_collector = pc.CreatePropertyCollector()
+                self._property_collector.CreateFilter(
+                    self._port_group_spec_set(), partialUpdates=False)
 
-            options = vmodl.query.PropertyCollector.WaitOptions(maxObjectUpdates=max_objects, maxWaitSeconds=0)
-            update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
-                                                                   options=options)
+            options = vmodl.query.PropertyCollector.WaitOptions(
+                maxObjectUpdates=max_objects, maxWaitSeconds=0)
+            update_set = self._property_collector.WaitForUpdatesEx(
+                version=self._property_collector_version, options=options)
 
             while update_set:
                 self._property_collector_version = update_set.version
-                if update_set.filterSet and update_set.filterSet[0].objectSet:
-                    for update in update_set.filterSet[0].objectSet:
-                        if update.kind == 'leave':
-                            pg = self._port_groups_by_ref.get(update.obj._moId)
-                            self._remove_port_group(pg)
-                        else:
-                            # update.obj
-                            props = {prop.name: prop.val for prop in update.changeSet}
-                            pg = self._port_groups_by_ref.get(update.obj)
+                self._parse_port_group_updates(update_set)
 
-                            if pg:  # Update
-                                self._remove_port_group(pg)
-                                if 'name' in props:
-                                    pg.name = props['name']
-                                if 'key' in props:  # Should never change, but hey...
-                                    pg.name = props['key']
-                                if 'config.description':
-                                    pg.description = props['description']
-                            else:
-                                pg = PortGroup(ref=update.obj,
-                                               key=props.get('key') or update.obj.key,
-                                               name=props.get('name'),
-                                               description=props.pop("config.description", ""),
-                                               config_version=props.pop("config.configVersion", None),
-                                               default_port_config=props.pop("config.defaultPortConfig", None),
-                                               )
-                            self._store_port_group(pg)
+                update_set = self._property_collector.WaitForUpdatesEx(
+                    version=self._property_collector_version,
+                    options=options)
 
-                update_set = self._property_collector.WaitForUpdatesEx(version=self._property_collector_version,
-                                                                       options=options)
+    def _parse_port_group_updates(self, update_set):
+        if not update_set.filterSet or not update_set.filterSet[0].objectSet:
+            return
+
+        for update in update_set.filterSet[0].objectSet:
+            if update.kind == 'leave':
+                pg = self._port_groups_by_ref.get(update.obj._moId)
+                self._remove_port_group(pg)
+            else:
+                # update.obj
+                props = {prop.name: prop.val for prop in update.changeSet}
+                pg = self._port_groups_by_ref.get(update.obj)
+
+                if pg:  # Update
+                    self._remove_port_group(pg)
+                    if 'name' in props:
+                        pg.name = props['name']
+                    if 'key' in props:  # Should never change, but hey...
+                        pg.name = props['key']
+                    if 'config.description':
+                        pg.description = props['description']
+                else:
+                    pg = PortGroup(
+                        ref=update.obj,
+                        key=props.get('key') or update.obj.key,
+                        name=props.get('name'),
+                        description=props.pop("config.description", ""),
+                        config_version=props.pop("config.configVersion",
+                                                 None),
+                        default_port_config=props.pop(
+                            "config.defaultPortConfig", None),
+                    )
+                self._store_port_group(pg)
 
     @stats.timed()
-    def create_dvportgroup(self, name, port_config, description=None, update=True):
+    def create_dvportgroup(self, name, port_config,
+                           description=None, update=True):
         """
         Creates an automatically-named dvportgroup on the dvswitch
-        with the specified sg rules and marks it as such through the description
+         with the specified sg rules and marks it as such through the
+         description
 
         Returns a portgroup object.
 
@@ -675,10 +741,12 @@ class DVSController(object):
             wait_for_task(pg_create_task, si=self.connection)
             pg_ref = pg_create_task.info.result
 
-            props = util.get_object_properties_dict(self.connection, pg_ref, ["key"])
+            props = util.get_object_properties_dict(self.connection, pg_ref,
+                                                    ["key"])
             delta = timeutils.utcnow() - now
             stats.timing('networking_dvs.dvportgroup.created', delta)
-            LOG.debug("Creating portgroup {} took {} seconds.".format(name, delta.seconds))
+            LOG.debug("Creating portgroup {} took {} seconds.".format(
+                name, delta.seconds))
 
             pg = PortGroup(
                 key=props['key'],
@@ -691,13 +759,15 @@ class DVSController(object):
             self._store_port_group(pg)
             return pg
         except vim.fault.DuplicateName:
-            LOG.info("Untagged port-group with matching name {} found, will update and use.".format(name))
+            LOG.info(("Untagged port-group with matching name {} found, "
+                      "will update and use.").format(name))
 
             if name not in self._port_groups_by_name:
                 self._sync_port_groups()
 
             if name not in self._port_groups_by_name:
-                LOG.error("Port-group with matching name {} not found while expected.".format(name))
+                LOG.error(("Port-group with matching name {}"
+                           " not found while expected.").format(name))
                 return
 
             existing = self._port_groups_by_name[name]
@@ -710,7 +780,8 @@ class DVSController(object):
             raise exceptions.wrap_wmvare_vim_exception(e)
 
     @stats.timed()
-    def update_dvportgroup(self, pg, port_config=None, name=None, retries=3, sync=None):
+    def update_dvportgroup(self, pg, port_config=None, name=None,
+                           retries=3, sync=None):
         if sync:
             sync.wait()
 
@@ -726,7 +797,8 @@ class DVSController(object):
             if (not name or name == pg.name) \
                     and (default_port_config or not port_config) \
                     and not _config_differs(default_port_config, port_config):
-                LOG.debug("Skipping update: No changes to known config on %s", pg.name)
+                LOG.debug("Skipping update: No changes to known config on %s",
+                          pg.name)
                 return
 
             try:
@@ -738,12 +810,14 @@ class DVSController(object):
 
                 now = timeutils.utcnow()
                 if not CONF.AGENT.dry_run:
-                    pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(spec=pg_spec)
+                    pg_update_task = pg.ref.ReconfigureDVPortgroup_Task(
+                        spec=pg_spec)
                 else:
                     LOG.debug(pg_spec)
 
                 pg.config_version = str(int(pg.config_version) + 1)
-                pg.default_port_config = port_config
+                pg.default_port_config = _merge_config(default_port_config,
+                                                       port_config)
 
                 if not CONF.AGENT.dry_run:
                     wait_for_task(pg_update_task, si=self.connection)
@@ -751,7 +825,9 @@ class DVSController(object):
                 delta = timeutils.utcnow() - now
                 stats.timing('networking_dvs.dvportgroup.updated', delta)
 
-                LOG.debug("Updating portgroup {} took {} seconds.".format(pg.name, delta.seconds))
+                LOG.debug("Updating portgroup {} took {} seconds.".format(
+                    pg.name, delta.seconds
+                ))
                 return
             except vim.fault.DvsOperationBulkFault as e:
                 self.rectify_for_fault(e)
@@ -759,8 +835,9 @@ class DVSController(object):
                 if ntry >= retries:
                     raise exceptions.wrap_wmvare_vim_exception(e)
                 LOG.debug("Concurrent modification detected, will retry.")
-                props = util.get_object_properties_dict(self.connection, pg.ref,
-                                                        ["config.configVersion", "config.defaultPortConfig"])
+                props = util.get_object_properties_dict(
+                    self.connection, pg.ref,
+                    ["config.configVersion", "config.defaultPortConfig"])
                 pg.config_version = props["config.configVersion"]
                 pg.default_port_config = props["config.defaultPortConfig"]
 
@@ -779,11 +856,13 @@ class DVSController(object):
                 continue
             host_ref = hf.host
             if host_ref in self.hosts_to_rectify:
-                if time.time() - self.rectify_wait > self.hosts_to_rectify[host_ref]:
+                if time.time() - self.rectify_wait \
+                        > self.hosts_to_rectify[host_ref]:
                     self.hosts_to_rectify[host_ref] = time.time()
                     hosts.add(host_ref)
                 else:
-                    LOG.debug("Timeout for host {} is not reached yet, skipping.".format(host_ref))
+                    LOG.debug(("Timeout for host {} is not reached yet,"
+                              " skipping.").format(host_ref))
             else:
                 self.hosts_to_rectify[host_ref] = time.time()
                 hosts.add(host_ref)
@@ -791,7 +870,8 @@ class DVSController(object):
         if not hosts:
             return
         LOG.debug("Hosts to rectify: {}".format(hosts))
-        return self.connection.content.dvSwitchManager.RectifyDvsOnHost_Task(hosts=list(hosts))
+        dsm = self.connection.content.dvSwitchManager
+        return dsm.RectifyDvsOnHost_Task(hosts=list(hosts))
 
     def switch_port_blocked_state(self, port):
         try:
@@ -907,20 +987,27 @@ class DVSController(object):
 
         dvs_list = {}
         with util.WithRetrieval(connection,
-                                util.get_objects(connection, vim.DistributedVirtualSwitch, 100, ['name', 'portgroup'])
+                                util.get_objects(
+                                    connection,
+                                    vim.DistributedVirtualSwitch,
+                                    100,
+                                    ['name', 'portgroup'])
                                 ) as dvswitches:
             for dvs in dvswitches:
                 p = {p.name: p.val for p in dvs.propSet}
                 if dvs_name == p['name']:
-                    return dvs.obj, DVSController._get_datacenter(connection, dvs.obj)
+                    return dvs.obj, DVSController._get_datacenter(
+                        connection, dvs.obj)
                 dvs_list[dvs.obj] = p['portgroup']
 
         for dvs, port_groups in six.iteritems(dvs_list):
             for pg in port_groups:
                 try:
-                    name = util.get_object_property(self.connection, pg, 'name')
+                    name = util.get_object_property(
+                        self.connection, pg, 'name')
                     if dvs_name == name:
-                        return dvs, DVSController._get_datacenter(connection, dvs)
+                        return dvs, DVSController._get_datacenter(
+                            connection, dvs)
                 except vim.fault.VimFault:
                     pass
 
@@ -937,9 +1024,13 @@ class DVSController(object):
 
         prop_spec = util.build_property_spec(vim.Datacenter, ['name'])
         select_set = util.build_selection_spec('ParentTraversalSpec')
-        select_set = util.build_traversal_spec('ParentTraversalSpec', vim.ManagedEntity, 'parent', False, [select_set])
+        select_set = util.build_traversal_spec('ParentTraversalSpec',
+                                               vim.ManagedEntity,
+                                               'parent',
+                                               False, [select_set])
         obj_spec = util.build_object_spec(entity_ref, [select_set])
-        prop_filter_spec = util.build_property_filter_spec([prop_spec], [obj_spec])
+        prop_filter_spec = util.build_property_filter_spec([prop_spec],
+                                                           [obj_spec])
         options = vmodl.query.PropertyCollector.RetrieveOptions()
         options.maxObjects = max_objects
         retrieve_result = property_collector.RetrievePropertiesEx(
@@ -1075,18 +1166,31 @@ class DVSController(object):
         return True
 
 
-def connect(config):
+def connect(conf):
     connection = None
     while not connection:
         try:
-            if not config.ca_certs:
-                connection = SmartConnectNoSSL(host=config.vsphere_hostname,
-                                               user=config.vsphere_login,
-                                               pwd=config.vsphere_password)
+            if not conf.ca_certs:
+                import ssl
+                if hasattr(ssl, '_create_unverified_context'):
+                    ssl_context = ssl._create_unverified_context()
+                else:
+                    ssl_context = None
             else:
-                connection = SmartConnectNoSSL(host=config.vsphere_hostname,
-                                          user=config.vsphere_login,
-                                          pwd=config.vsphere_password)
+                ssl_context = ssl.create_default_context(capath=conf.ca_certs)
+
+            smart_stub = SmartStubAdapter(
+                host=conf.vsphere_hostname,
+                sslContext=ssl_context,
+                connectionPoolTimeout=0)
+
+            session_stub = VimSessionOrientedStub(
+                smart_stub,
+                VimSessionOrientedStub.makeUserLoginMethod(
+                    conf.vsphere_login, conf.vsphere_password))
+
+            connection = vim.ServiceInstance('ServiceInstance',
+                                             session_stub)
 
             if connection:
                 atexit.register(Disconnect, connection)
@@ -1101,7 +1205,8 @@ def create_network_map_from_config(config, connection=None, **kwargs):
     """Creates physical network to dvs map from config"""
     connection = connection or connect(config)
     network_map = {}
-    for network, dvs in six.iteritems(helpers.parse_mappings(config.network_maps)):
-        network_map[network] = DVSController(dvs, connection=connection,
-                                             rectify_wait=config.host_rectify_timeout, **kwargs)
+    for network, dvs in six.iteritems(parse_mappings(config.network_maps)):
+        network_map[network] = DVSController(
+            dvs, connection=connection,
+            rectify_wait=config.host_rectify_timeout, **kwargs)
     return network_map

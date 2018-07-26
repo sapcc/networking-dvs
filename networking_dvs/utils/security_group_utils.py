@@ -21,7 +21,7 @@ from collections import defaultdict, Counter
 import attr
 import six
 from ipaddress import ip_network, collapse_addresses, IPv4Network, IPv6Network
-#from neutron._i18n import _
+
 from oslo_log import log
 from pyVmomi import vim, vmodl
 from eventlet import sleep
@@ -30,12 +30,17 @@ from networking_dvs.common import constants as dvs_const
 from networking_dvs.utils import spec_builder as builder
 from networking_dvs.common.util import optional_attr
 
+try:
+    from neutron._i18n import _
+except ImportError:
+    from neutron.i18n import _LI as _
+
 LOG = log.getLogger(__name__)
 
 
 _ANY_IPS = {
-    'IPv4': ip_network(six.u('0.0.0.0/0')),
-    'IPv6': ip_network(six.u('::/0'))
+    'IPv4': ip_network(six.u('0.0.0.0/0'), strict=False),
+    'IPv6': ip_network(six.u('::/0'), strict=False)
 }
 
 
@@ -257,7 +262,8 @@ class EgressRule(TrafficRuleBuilder):
 class DropAllRule(TrafficRuleBuilder):
     action = vim.DvsDropNetworkRuleAction
 
-def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=None):
+def compile_filter_policy(sg_rules=None, hashed_rules=None,
+                          filter_config_key=None):
     hashed_rules = hashed_rules or {}
     sg_rules = sg_rules or []
     rules = []
@@ -299,10 +305,13 @@ def compile_filter_policy(sg_rules=None, hashed_rules=None, filter_config_key=No
     return builder.filter_policy(rules, filter_config_key=filter_config_key)
 
 
-def port_configuration(port_key, sg_rules=None, hashed_rules=None, version=None, filter_config_key=None):
+def port_configuration(port_key, sg_rules=None, hashed_rules=None,
+                       version=None, filter_config_key=None):
     setting = vim.VMwareDVSPortSetting()
-    setting.filterPolicy = compile_filter_policy(sg_rules=sg_rules, hashed_rules=hashed_rules,
-                                                 filter_config_key=filter_config_key)
+    setting.filterPolicy = compile_filter_policy(
+        sg_rules=sg_rules,
+        hashed_rules=hashed_rules,
+        filter_config_key=filter_config_key)
     spec = builder.port_config_spec(setting=setting, version=version)
     spec.key = port_key
 
@@ -344,7 +353,7 @@ def _create_rule(rule_info, ip=None, name=None):
             rule.backward_port_range = (
                 rule_info.source_port_range_min or source_port_range_min_default,
                 rule_info.source_port_range_max or dvs_const.MAX_EPHEMERAL_PORT)
-    except AttributeError:
+    except KeyError:
         return None
 
     return rule
@@ -396,19 +405,26 @@ def security_group_set(port):
         LOG.warning("No security groups for port %s", port['id'])
         return None
 
+    network_id = port.get('network_id')
+    if not network_id:
+        LOG.warning("No network for port %s", port['id'])
+        return None
+
     # There are 36 chars to a uuid, and in the description fits 255 chars
+    # The first 37 chars will be used for the network id, though
     security_groups = sorted(security_groups)
     num_groups = len(security_groups)
-    if num_groups < 7:  # Up to 6 fit in full length
-        return ",".join(security_groups)
-    elif num_groups < 13:  # Up to twelve in split in the "middle"
-        return ",".join([g[:18] for g in security_groups])
-    elif num_groups < 28:
-        return ",".join([g[:8] for g in security_groups])
+    if num_groups < 5:  # Up to 5 fit in full length
+        sgs = ",".join(security_groups)
+    elif num_groups < 12:  # Up to eleven in split in the "middle"
+        sgs = ",".join([g[:18] for g in security_groups])
+    elif num_groups < 25:
+        sgs = ",".join([g[:8] for g in security_groups])
+    else:
+        LOG.warning("Too many security groups for port %s", port['id'])
+        return None
 
-    LOG.warning("Too many security groups for port %s", port['id'])
-    return None
-
+    return ":".join([network_id, sgs])
 
 def apply_rules(rules, sg_aggr, decrement=False):
     """
@@ -473,6 +489,7 @@ def _consolidate_ipv4_6(rules):
             id_ = (rule.direction, rule.protocol, rule.port_range_min, rule.port_range_max,
                    rule.source_port_range_min, rule.source_port_range_max)
             grouped[id_].append(rule)
+
     for ruleset in six.itervalues(grouped):
         # Cannot be zero
         if len(ruleset) == 1:

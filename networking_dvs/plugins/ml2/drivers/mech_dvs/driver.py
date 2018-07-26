@@ -12,17 +12,26 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from neutron_lib import context
 from neutron.agent import securitygroups_rpc
-from neutron_lib.api.definitions import portbindings
-from neutron._i18n import _
-from neutron_lib import constants as neutron_constants
-from neutron_lib.plugins.ml2 import api
+
 from neutron.plugins.ml2.drivers import mech_agent
 from oslo_log import log
 
 from networking_dvs.api import dvs_agent_rpc_api
 from networking_dvs.common import constants as dvs_constants
+
+try:
+    from neutron._i18n import _
+    from neutron_lib.api.definitions import portbindings
+    from neutron_lib import constants as neutron_constants
+    from neutron_lib import context
+    from neutron_lib.plugins.ml2 import api
+except ImportError:
+    from neutron.i18n import _LI as _
+    from neutron.extensions import portbindings
+    from neutron.plugins.common import constants as neutron_constants
+    from neutron import context
+    from neutron.plugins.ml2 import driver_api as api
 
 LOG = log.getLogger(__name__)
 

@@ -1,6 +1,9 @@
 from oslo_config import cfg
 
-from neutron.conf.agent import common
+try:
+    from neutron.conf.agent import common as config
+except ImportError:
+    from neutron.agent.common import config
 
 DEFAULT_BRIDGE_MAPPINGS = []
 DEFAULT_VLAN_RANGES = []
@@ -63,17 +66,19 @@ dvs_opts = [
                help=_("Precreate networks on DVS")),
     cfg.IntOpt('trace_every_nth_iteration',
                default=0,
-               help=_("Create a profile trace for every nth iteration (if profiling is enabled)")),
+               help=_("Create a profile trace for every nth iteration"
+                      " (if profiling is enabled)")),
     cfg.IntOpt('max_ports_per_iteration',
-               default=50,
+               default=10,
                help=_("Number of ports to get per iteration")),
     cfg.IntOpt('default_initial_num_ports',
                default=2,
-               help=_("Number of ports a newly created port-group should have")),
+               help=_("Number of ports a newly "
+                      "created port-group should have")),
 ]
 
 cfg.CONF.register_opts(dvs_opts, "DVS")
 cfg.CONF.register_opts(agent_opts, "AGENT")
 cfg.CONF.register_opts(vmware_opts, "ML2_VMWARE")
-common.register_agent_state_opts_helper(cfg.CONF)
+config.register_agent_state_opts_helper(cfg.CONF)
 CONF = cfg.CONF
