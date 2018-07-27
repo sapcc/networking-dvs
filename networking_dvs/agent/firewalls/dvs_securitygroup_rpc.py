@@ -215,10 +215,10 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
     @enginefacade.reader
     def _setup_port_groups(self, context, security_group_ids=None):
         local_security_groups = set()
-        for network_id, security_groups in self._get_active_security_group_tuples(
+        for net_id, security_groups in self._get_active_security_group_tuples(
                 context, security_group_ids=security_group_ids):
             sg_set = sg_util.security_group_set(
-                {'network_id': network_id,
+                {'network_id': net_id,
                  'security_groups': security_groups})
             for dvs_uuid, dvs in six.iteritems(self.v_center.uuid_dvs_map):
                 dvs.port_group_added.add(self._port_group_added_callback)
@@ -227,7 +227,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                 for security_group_id in security_groups:
                     local_security_groups.add(security_group_id)
                     sg = self._get_security_group_obj(security_group_id)
-                    self._pg_to_sgs[port_group_name] = (network_id,
+                    self._pg_to_sgs[port_group_name] = (net_id,
                                                         security_groups)
                     # We will have to fetch that object later
                     pgs = sg.port_groups_by_dvs[dvs_uuid]

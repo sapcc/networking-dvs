@@ -351,9 +351,11 @@ def _create_rule(rule_info, ip=None, name=None):
             rule.port_range = (rule_info.port_range_min,
                                rule_info.port_range_max)
             rule.backward_port_range = (
-                rule_info.source_port_range_min or source_port_range_min_default,
-                rule_info.source_port_range_max or dvs_const.MAX_EPHEMERAL_PORT)
-    except KeyError:
+                rule_info.source_port_range_min
+                or source_port_range_min_default,
+                rule_info.source_port_range_max
+                or dvs_const.MAX_EPHEMERAL_PORT)
+    except AttributeError, KeyError:
         return None
 
     return rule
@@ -425,29 +427,6 @@ def security_group_set(port):
         return None
 
     return ":".join([network_id, sgs])
-
-def apply_rules(rules, sg_aggr, decrement=False):
-    """
-    Apply a set of security group rules to a security group aggregate structure
-    {
-        "rules": { "comparable_rule": count }
-        "dirty": True|False
-    """
-    for rule in rules:
-        if rule in sg_aggr.rules:
-            count = sg_aggr.rules[rule]
-            if decrement:
-                count -= 1
-                if count == 0:
-                    del sg_aggr.rules[rule]
-                    sg_aggr.dirty = True
-                    continue
-            else:
-                count += 1
-            sg_aggr.rules[rule] = count
-        else:
-            sg_aggr.rules[rule] = 1
-            sg_aggr.dirty = True
 
 
 def _consolidate_rules(rules):
