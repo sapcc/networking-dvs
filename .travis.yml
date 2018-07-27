@@ -1,4 +1,8 @@
-sudo: false
+# Needed for the old mitaka psycopg2
+group: deprecated-2017Q4
+dist: trusty
+sudo: required
+
 language: python
 cache:
   pip: true
