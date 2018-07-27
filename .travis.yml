@@ -6,12 +6,19 @@ matrix:
   include:
   - python: "2.7"
     env:
-    - TOXENV=py27
-    - NEUTRON_SOURCE=git+https://github.com/sapcc/neutron.git@stable/queens#egg=neutron
+    - TOXENV=py27-queens
+    - UPPER_CONSTRAINTS_FILE=https://raw.githubusercontent.com/sapcc/requirements/stable/queens-m3/upper-constraints.txt
+    - NEUTRON_SOURCE=git+https://github.com/sapcc/neutron.git@stable/queens-m3#egg=neutron
+  - python: "2.7"
+    env:
+    - TOXENV=py27-mitaka
+    - UPPER_CONSTRAINTS_FILE=https://raw.githubusercontent.com/sapcc/requirements/stable/mitaka-m3/upper-constraints.txt
+    - NEUTRON_SOURCE=git+https://github.com/sapcc/neutron.git@stable/mitaka-m3#egg=neutron
   - python: "2.7"
     env:
     - TOXENV=pep8
-    - NEUTRON_SOURCE=git+https://github.com/sapcc/neutron.git@stable/queens#egg=neutron
+    - UPPER_CONSTRAINTS_FILE=https://raw.githubusercontent.com/sapcc/requirements/stable/queens-m3/upper-constraints.txt
+    - NEUTRON_SOURCE=git+https://github.com/sapcc/neutron.git@stable/queens-m3#egg=neutron
 install:
 - pip install tox-travis
 script: tox
