@@ -16,7 +16,8 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
         pass
 
     def apply_port_filter(self, ports):
-        # This driver does all of its processing during the prepare_port_filter call
+        # This driver does all of its processing during the
+        # prepare_port_filter call
         pass
 
     def update_port_filter(self, ports):
@@ -41,5 +42,6 @@ class DvsSecurityGroupsDriver(firewall.FirewallDriver):
     def update_security_group_rules(self, sg_id, rules):
         pass
 
-    def security_group_updated(self, action_type, sec_group_ids, device_id=None):
+    def security_group_updated(self, action_type, sec_group_ids,
+                               device_id=None):
         pass

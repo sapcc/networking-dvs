@@ -211,7 +211,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         # LOG.info("port_update message {}".format(kwargs))
         port_id = port['id']
         # Avoid updating a port, which has not been created yet
-        if port_id in self.known_ports and not port_id in self.deleted_ports:
+        if port_id in self.known_ports and port_id not in self.deleted_ports:
             self.updated_ports[port_id] = port
         # LOG.debug("port_update message processed for {}".format(kwargs))
 
@@ -332,34 +332,33 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         port_down_ids = []
 
         now = None
-        with timeutils.StopWatch() as w:
-            for port_key in succeeded_keys:
-                port = dvs.ports_by_key.get(port_key, None)
-                if not port:
-                    LOG.debug("Port with key {} has already been removed."
-                              .format(port_key))
-                    continue
+        for port_key in succeeded_keys:
+            port = dvs.ports_by_key.get(port_key, None)
+            if not port:
+                LOG.debug("Port with key {} has already been removed."
+                          .format(port_key))
+                continue
 
-                port_id = port.get('port_id') or port.get('id')
-                self.unbound_ports.pop(port_id, None)
-                if port.get('admin_state_up', True):
-                    port_up_ids.append(port_id)
-                else:
-                    port_down_ids.append(port_id)
+            port_id = port.get('port_id') or port.get('id')
+            self.unbound_ports.pop(port_id, None)
+            if port.get('admin_state_up', True):
+                port_up_ids.append(port_id)
+            else:
+                port_down_ids.append(port_id)
 
-                port_desc = port.get('port_desc')
-                if not port_desc:
-                    continue
-                if port_desc.connected_since:
-                    now = now or timeutils.utcnow()
-                    stats.timing('networking_dvs.ports.bound',
-                                 now - port_desc.connected_since)
+            port_desc = port.get('port_desc')
+            if not port_desc:
+                continue
+            if port_desc.connected_since:
+                now = now or timeutils.utcnow()
+                stats.timing('networking_dvs.ports.bound',
+                             now - port_desc.connected_since)
 
         if failed_keys:
             stats.increment('networking_dvs.ports.bound.failures',
                             len(failed_keys))
 
-        LOG.info(_LI("_bound_ports({}, {}) ({} failures)").format(
+        LOG.info(_("_bound_ports({}, {}) ({} failures)").format(
             port_up_ids, port_down_ids, len(failed_keys)))
 
         if port_up_ids or port_down_ids:
@@ -398,8 +397,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 LOG.warning(_("Missing attribute in port {}").format(port))
             elif port_network_type == 'vlan' and port_segmentation_id:
                 if (port_segmentation_id != port_vlan_id or
-                    port['admin_state_up']
-                        != (port.get('status') == 'ACTIVE')):
+                        port['admin_state_up'] !=
+                        (port.get('status') == 'ACTIVE')):
                     # Either mismatch in VLAN or status
                     ports_to_bind.append(port)
             elif port_network_type == 'flat':
@@ -558,7 +557,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
     def _update_device_list(self, port_down_ids, port_up_ids):
         with stats.timed('%s.%s._update_device_list' % (
                 self.__module__, self.__class__.__name__)):
-            LOG.info(_LI("Update {} down {} agent {} host {}").format(
+            LOG.info(_("Update {} down {} agent {} host {}").format(
                 port_up_ids, port_down_ids, self.agent_id, self.conf.host))
             if not CONF.AGENT.dry_run:
                 self.plugin_rpc.update_device_list(
@@ -607,7 +606,6 @@ def neutron_dvs_cli():
     If --correct opt is set a reconfigure task on the port
     will be started which will apply the rules from
     the Neutron port to the DVS port
-    :return: 
     """
     common_config.init(sys.argv[1:])
     port_id = CONF.port_id
@@ -619,10 +617,7 @@ def neutron_dvs_cli():
         agent.context, devices=[port_id],
         agent_id=agent.agent_id, host=agent.conf.host)
 
-    if neutron_ports[0].has_key('mac_address'):
-        mac_addr = neutron_ports[0]['mac_address']
-    else:
-        raise Exception('Neutron port not found!')
+    mac_addr = neutron_ports[0]['mac_address']
 
     sg_api = securitygroups_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
     sg_info = sg_api.security_group_info_for_devices(
@@ -645,10 +640,10 @@ def neutron_dvs_cli():
                                              None).setting
 
     neutron_vlan_id = neutron_ports[0]['segmentation_id']
-    dvpg_name = dvs_util.dvportgroup_name(dvs.uuid, sg_set)
+    dvs_util.dvportgroup_name(dvs.uuid, sg_set)
 
     """
-        Retrieving the DVS portgroup and properties
+    Retrieving the DVS portgroup and properties
     """
     port_group = dvs.get_port_group_for_security_group_set(sg_set)
     portgroup_key = port_group['ref']['value']
@@ -699,11 +694,10 @@ def main():
     except (ValueError, TypeError):
         pass
 
-    backdoor = eventlet_backdoor.initialize_if_enabled(cfg.CONF)
+    eventlet_backdoor.initialize_if_enabled(cfg.CONF)
 
     try:
         agent = DvsNeutronAgent()
-        dvs_inst = agent
         # Start everything.
         LOG.info(_("Agent initialized successfully, now running... "))
         agent.daemon_loop()

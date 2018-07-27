@@ -35,7 +35,8 @@ def pg_config(default_port_config):
     return spec
 
 
-def port_config_spec(key=None, version=None, setting=None, name=None, description=None):
+def port_config_spec(key=None, version=None, setting=None, name=None,
+                     description=None):
     spec = vim.DVPortConfigSpec(operation='edit')
 
     if key:
@@ -143,7 +144,8 @@ def wait_options(max_wait_seconds=None, max_object_updates=None):
     return wait_options
 
 
-def virtual_device_connect_info(allow_guest_control, connected, start_connected):
+def virtual_device_connect_info(allow_guest_control, connected,
+                                start_connected):
     virtual_device_connect_info = vim.vm.device.VirtualDevice.ConnectInfo()
 
     virtual_device_connect_info.allowGuestControl = allow_guest_control
@@ -153,7 +155,8 @@ def virtual_device_connect_info(allow_guest_control, connected, start_connected)
     return virtual_device_connect_info
 
 
-def distributed_virtual_switch_port_connection(switch_uuid, port_key=None, portgroup_key=None):
+def distributed_virtual_switch_port_connection(switch_uuid, port_key=None,
+                                               portgroup_key=None):
     # connectionCookie is left out intentionally, it cannot be set
     distributed_virtual_switch_port_connection = vim.dvs.PortConnection()
     distributed_virtual_switch_port_connection.switchUuid = switch_uuid
@@ -166,7 +169,8 @@ def distributed_virtual_switch_port_connection(switch_uuid, port_key=None, portg
     return distributed_virtual_switch_port_connection
 
 
-def virtual_device_config_spec(device, file_operation=None, operation=None, profile=None):
+def virtual_device_config_spec(device, file_operation=None, operation=None,
+                               profile=None):
     virtual_device_config_spec = vim.vm.device.VirtualDeviceSpec()
     virtual_device_config_spec.device = device
 

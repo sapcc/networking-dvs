@@ -1,7 +1,6 @@
 """Tests for security group utils"""
 import unittest
 
-import mock
 import six
 import testtools
 from ipaddress import IPv4Network
@@ -236,27 +235,29 @@ class SecurityGroupUtilsTest(testtools.TestCase):
 
     def test__create_rule(self):
         source_ip_prefix = self.get_fake_ipv4_network(six.u('10.192.168.11'))
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
-                                                protocol='udp',
-                                                direction='ingress',
-                                                port_range_min=23,
-                                                port_range_max=23,
-                                                source_ip_prefix=source_ip_prefix,
-                                                port_range=(546, 546),
-                                                backward_port_range=(547, 547))
+        fake_rule = self._get_fake_ingress_rule(
+            ethertype="IPv4",
+            protocol='udp',
+            direction='ingress',
+            port_range_min=23,
+            port_range_max=23,
+            source_ip_prefix=source_ip_prefix,
+            port_range=(546, 546),
+            backward_port_range=(547, 547))
 
         result = sg_utils._create_rule(fake_rule)
         self.assertIsNotNone(result)
 
     def test__create_rule_error(self):
         source_ip_prefix = self.get_fake_ipv4_network(six.u('10.192.168.11'))
-        fake_rule = self._get_fake_ingress_rule(ethertype="IPv4",
-                                                direction='ingress',
-                                                port_range_min=23,
-                                                port_range_max=23,
-                                                source_ip_prefix=source_ip_prefix,
-                                                port_range=(546, 546),
-                                                backward_port_range=(547, 547))
+        fake_rule = self._get_fake_ingress_rule(
+            ethertype="IPv4",
+            direction='ingress',
+            port_range_min=23,
+            port_range_max=23,
+            source_ip_prefix=source_ip_prefix,
+            port_range=(546, 546),
+            backward_port_range=(547, 547))
 
         """
         Simulating missing attribute for raise AttributeError which

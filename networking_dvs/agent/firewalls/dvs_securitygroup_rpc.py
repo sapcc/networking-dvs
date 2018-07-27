@@ -12,32 +12,31 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 
 import attr
 import eventlet
 import six
-
 from netaddr import IPNetwork
+from oslo_concurrency import lockutils
 from oslo_db.sqlalchemy import enginefacade
 from oslo_log import log as logging
-from oslo_concurrency import lockutils
-from oslo_utils import timeutils
 from pyVmomi import vim
 from sqlalchemy.sql import distinct, or_
 
 from networking_dvs.common import exceptions
-from networking_dvs.common.constants import DVS, ATTR_ARGS
+from networking_dvs.common.constants import ATTR_ARGS, DVS
 from networking_dvs.common.db import string_agg
 from networking_dvs.common.util import stats
 from networking_dvs.utils import security_group_utils as sg_util
 from networking_dvs.utils import spec_builder as builder
 from networking_dvs.utils.dvs_util import dvportgroup_name
-from neutron.db.models_v2 import Port
 from neutron.db.models_v2 import IPAllocation
-from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin
+from neutron.db.models_v2 import Port
 from neutron.db.securitygroups_rpc_base import DIRECTION_IP_PREFIX
+from neutron.db.securitygroups_rpc_base import SecurityGroupServerRpcMixin
 from neutron.plugins.ml2.models import PortBindingLevel
+from oslo_utils import timeutils
 
 _LEGACY = False
 try:
@@ -70,9 +69,11 @@ class SecurityGroup(object):
 
 
 class Any(object):
-    def __init__(self, *answer): self.answer = answer
+    def __init__(self, *answer):
+        self.answer = answer
 
-    def get(self, _): return self.answer
+    def get(self, _):
+        return self.answer
 
 
 def _record_timing(_, oldest, tags):
@@ -102,11 +103,11 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         else:
             fixed_ips = [ip for ip, in
                          context.session.query(
-                              IPAllocation.ip_address
-                          ).join(
-                              Port
-                          ).filter(Port.network_id == network_id,
-                                   Port.device_owner == 'network:dhcp')]
+                             IPAllocation.ip_address
+                         ).join(
+                             Port
+                         ).filter(Port.network_id == network_id,
+                                  Port.device_owner == 'network:dhcp')]
 
         example_port = {'network_id': network_id,
                         'security_group_rules': [],
@@ -149,8 +150,8 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
             return network_id, sgs
         else:
             sg_binding_sgid = sg_db.SecurityGroupPortBinding.security_group_id
-            constraints=[sg_binding_sgid.startswith(sg_prefix)
-                         for sg_prefix in sgs]
+            constraints = [sg_binding_sgid.startswith(sg_prefix)
+                           for sg_prefix in sgs]
             for _, t in self._get_active_security_group_tuples(
                     self.context, constraints=or_(*constraints)):
                 if len(t) == len(sgs):
@@ -411,7 +412,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
 
         now = None
         for sg_id in security_groups:
-            if not sg_id in self._to_refresh:
+            if sg_id not in self._to_refresh:
                 now = now or timeutils.utcnow_ts(True)
                 self._to_refresh[sg_id] = now
 
@@ -438,7 +439,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
 
         now = None
         for sg_id in dependent_groups:
-            if not sg_id in self._to_refresh:
+            if sg_id not in self._to_refresh:
                 now = now or timeutils.utcnow_ts(True)
                 self._to_refresh[sg_id] = now
 
@@ -469,9 +470,9 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         query = session.query(distinct(
             string_agg(sg_binding_sgid, separator, sg_binding_sgid)),
             Port.network_id
-            ).join(PortBindingLevel,
-                   PortBindingLevel.port_id == sg_binding_port).\
-            join(Port, Port.id == sg_binding_port).\
+        ).join(PortBindingLevel,
+               PortBindingLevel.port_id == sg_binding_port). \
+            join(Port, Port.id == sg_binding_port). \
             filter(PortBindingLevel.host == self.config.host,
                    PortBindingLevel.driver == DVS,
                    PortBindingLevel.segment_id.isnot(None),  # Unbound ports
@@ -481,18 +482,19 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
             query = query.filter(constraints)
 
         if security_group_ids is not None:
-            subquery = session.query(sg_binding_port).\
+            subquery = session.query(sg_binding_port). \
                 join(PortBindingLevel,
                      PortBindingLevel.port_id == sg_binding_port). \
                 filter(PortBindingLevel.host == self.config.host,
-                   PortBindingLevel.driver == DVS,
-                   PortBindingLevel.segment_id.isnot(None),  # Unbound ports
-                   sg_binding_sgid.in_(security_group_ids)
-                   ).subquery()
+                       PortBindingLevel.driver == DVS,
+                       PortBindingLevel.segment_id.isnot(None),
+                       # Unbound ports
+                       sg_binding_sgid.in_(security_group_ids)
+                       ).subquery()
             query = query.filter(sg_binding_port.in_(subquery))
 
         for sgs, network_id in query.group_by(Port.network_id,
-                                               sg_binding_port):
+                                              sg_binding_port):
             security_groups.append((network_id, sgs.split(separator)))
 
         return security_groups

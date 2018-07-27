@@ -20,6 +20,7 @@ except ImportError:
     from neutron.common import exceptions
     from neutron.i18n import _
 
+
 class VMWareDVSException(exceptions.NeutronException):
     """Base of all exceptions throwed by vmware_dvs driver"""
     message = _('VMWare DVS exception occurred. Original Exception: '

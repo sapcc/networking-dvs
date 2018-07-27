@@ -16,19 +16,18 @@
 import abc
 import bisect
 import copy
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 import attr
 import six
-from ipaddress import ip_network, collapse_addresses, IPv4Network, IPv6Network
-
-from oslo_log import log
-from pyVmomi import vim, vmodl
 from eventlet import sleep
+from ipaddress import IPv4Network, IPv6Network, collapse_addresses, ip_network
+from oslo_log import log
+from pyVmomi import vim
 
 from networking_dvs.common import constants as dvs_const
-from networking_dvs.utils import spec_builder as builder
 from networking_dvs.common.util import optional_attr
+from networking_dvs.utils import spec_builder as builder
 
 try:
     from neutron._i18n import _
@@ -36,7 +35,6 @@ except ImportError:
     from neutron.i18n import _LI as _
 
 LOG = log.getLogger(__name__)
-
 
 _ANY_IPS = {
     'IPv4': ip_network(six.u('0.0.0.0/0'), strict=False),
@@ -57,11 +55,13 @@ class Rule(object):
     ethertype = attr.ib(default=None)
     protocol = attr.ib(default=None)
 
-    dest_ip_prefix = attr.ib(default=None, convert=optional_attr(_to_ip_network))
+    dest_ip_prefix = attr.ib(default=None,
+                             convert=optional_attr(_to_ip_network))
     port_range_min = attr.ib(default=0, convert=int)
     port_range_max = attr.ib(default=0, convert=int)
 
-    source_ip_prefix = attr.ib(default=None, convert=optional_attr(_to_ip_network))
+    source_ip_prefix = attr.ib(default=None,
+                               convert=optional_attr(_to_ip_network))
     source_port_range_min = attr.ib(default=0, convert=int)
     source_port_range_max = attr.ib(default=0, convert=int)
 
@@ -191,7 +191,7 @@ class TrafficRuleBuilder(object):
         if min_port:
             if self.protocol == 'icmp':
                 LOG.info(_('Vmware dvs driver does not support '
-                             '"type" and "code" for ICMP protocol.'))
+                           '"type" and "code" for ICMP protocol.'))
                 return False
             else:
                 return True
@@ -261,6 +261,7 @@ class EgressRule(TrafficRuleBuilder):
 
 class DropAllRule(TrafficRuleBuilder):
     action = vim.DvsDropNetworkRuleAction
+
 
 def compile_filter_policy(sg_rules=None, hashed_rules=None,
                           filter_config_key=None):
@@ -351,11 +352,11 @@ def _create_rule(rule_info, ip=None, name=None):
             rule.port_range = (rule_info.port_range_min,
                                rule_info.port_range_max)
             rule.backward_port_range = (
-                rule_info.source_port_range_min
-                or source_port_range_min_default,
-                rule_info.source_port_range_max
-                or dvs_const.MAX_EPHEMERAL_PORT)
-    except AttributeError, KeyError:
+                rule_info.source_port_range_min or
+                source_port_range_min_default,
+                rule_info.source_port_range_max or
+                dvs_const.MAX_EPHEMERAL_PORT)
+    except (AttributeError, KeyError):
         return None
 
     return rule
@@ -432,12 +433,18 @@ def security_group_set(port):
 def _consolidate_rules(rules):
     grouped = defaultdict(list)
     for rule in rules:
-        id_ = (rule.direction, rule.ethertype, rule.protocol, rule.port_range_min, rule.port_range_max,
-               rule.source_port_range_min, rule.source_port_range_max)
+        id_ = (rule.direction,
+               rule.ethertype,
+               rule.protocol,
+               rule.port_range_min,
+               rule.port_range_max,
+               rule.source_port_range_min,
+               rule.source_port_range_max)
         grouped[id_].append(rule)
 
     for rule_set, rules in six.iteritems(grouped):
-        collapsed = sorted(collapse_addresses([rule.ip_prefix for rule in rules if rule.ip_prefix]))
+        collapsed = sorted(collapse_addresses(
+            [rule.ip_prefix for rule in rules if rule.ip_prefix]))
         for rule in rules:
             try:
                 ip_prefix = rule.ip_prefix
@@ -448,7 +455,8 @@ def _consolidate_rules(rules):
                     collapsed_address = collapsed[idx]
                     if not collapsed_address or collapsed_address == ip_prefix:
                         yield rule
-                    elif ip_prefix.network_address == collapsed_address.network_address:
+                    elif ip_prefix.network_address == \
+                            collapsed_address.network_address:
                         new_rule = copy.copy(rule)
                         new_rule.ip_prefix = collapsed_address
                         yield new_rule
@@ -465,7 +473,8 @@ def _consolidate_ipv4_6(rules):
         if rule.ip_prefix and rule.ip_prefix.prefixlen > 0:
             yield rule
         else:
-            id_ = (rule.direction, rule.protocol, rule.port_range_min, rule.port_range_max,
+            id_ = (rule.direction, rule.protocol, rule.port_range_min,
+                   rule.port_range_max,
                    rule.source_port_range_min, rule.source_port_range_max)
             grouped[id_].append(rule)
 
@@ -476,7 +485,8 @@ def _consolidate_ipv4_6(rules):
         else:
             # The only two ethertypes we have are IPv4 and IPv6
             items = attr.asdict(ruleset[0])
-            # We drop the ethertype and prefixes, which will result in any IPv4 or IPv6 address
+            # We drop the ethertype and prefixes, which will result in any
+            # IPv4 or IPv6 address
             items.pop('ethertype')
             items.pop('source_ip_prefix')
             items.pop('dest_ip_prefix')

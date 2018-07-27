@@ -16,10 +16,9 @@ import os
 
 if not os.environ.get('DISABLE_EVENTLET_PATCHING'):
     import eventlet
-
     eventlet.monkey_patch()
 
-from eventlet.queue import Full, Empty, LightQueue as Queue
+from eventlet.queue import Empty, LightQueue as Queue
 from eventlet.event import Event
 from eventlet import sleep
 
@@ -124,11 +123,11 @@ class _DVSPortDesc(object):
         # or DistributedVirtualPort
         values.update(
             # switchUuid in connection, dvsUuid in port
-            dvs_uuid=_cast(getattr(port, 'switchUuid', None)
-                           or getattr(port, 'dvsUuid', None)),
+            dvs_uuid=_cast(getattr(port, 'switchUuid', None) or
+                           getattr(port, 'dvsUuid', None)),
             # portKey in connection, key in port
-            port_key=_cast(getattr(port, 'portKey', None)
-                           or getattr(port, 'key', None)),
+            port_key=_cast(getattr(port, 'portKey', None) or
+                           getattr(port, 'key', None)),
             port_group_key=_cast(port.portgroupKey),
             connection_cookie=_cast(getattr(port, 'connectionCookie', None)),
         )
@@ -172,7 +171,8 @@ class _DVSPortMonitorDesc(_DVSPortDesc):
 
 
 class VCenterMonitor(object):
-    def __init__(self, vc_api, config, connection=None, quit_event=None, pool=None):
+    def __init__(self, vc_api, config, connection=None, quit_event=None,
+                 pool=None):
         self._quit_event = quit_event or Event()
         self.changed = dict()
         self._property_collector = None
@@ -235,8 +235,10 @@ class VCenterMonitor(object):
                         self.vcenter_api.vcenter_port_changes(changed)
 
                     now = utcnow()
-                    for mac, (when, port_desc, iteration) in six.iteritems(self.down_ports):
-                        if port_desc.status != 'untried' or 0 == self.iteration - iteration:
+                    for mac, (when, port_desc, iteration) in six.iteritems(
+                            self.down_ports):
+                        if port_desc.status != 'untried' or 0 == \
+                                self.iteration - iteration:
                             LOG.debug('Down: {} {} for {} {} {}'.format(
                                 mac, port_desc.port_key,
                                 self.iteration - iteration,
@@ -257,7 +259,7 @@ class VCenterMonitor(object):
         while not self._quit_event.ready():
             try:
                 self._run()
-            except:
+            except Exception:
                 import traceback
                 LOG.error(traceback.format_exc())
                 os._exit(1)
@@ -281,9 +283,9 @@ class VCenterMonitor(object):
                 exit(2)
 
         container_view = connection.content.viewManager.CreateContainerView(
-                                               container=container,
-                                               type=[vim.VirtualMachine],
-                                               recursive=True)
+            container=container,
+            type=[vim.VirtualMachine],
+            recursive=True)
 
         traversal_spec = c_util.build_traversal_spec('traverseEntities',
                                                      vim.ContainerView, 'view',
@@ -317,7 +319,7 @@ class VCenterMonitor(object):
                 self.changed[id(port_desc)] = port_desc
 
     def _handle_virtual_machine(self, update, now):
-        vmobref = str(update.obj._moId) # String 'vmobref-#'
+        vmobref = str(update.obj._moId)  # String 'vmobref-#'
         change_set = getattr(update, 'changeSet', [])
         vm_hw = self._hardware_map[vmobref]
 
@@ -450,7 +452,7 @@ class VCenterMonitor(object):
                 'power_state', None)
             if power_state != 'poweredOn':
                 self.untried_ports[mac_address] = port_desc
-            elif not mac_address in self.down_ports:
+            elif mac_address not in self.down_ports:
                 status = port_desc.status
                 LOG.debug(
                     "Port {} {} registered as down: {} {}".format(
@@ -614,9 +616,9 @@ class VCenter(object):
             specs = []
             for port in ports_on_switch:
                 network_type = port.get('network_type')
-                if (network_type == 'vlan'
-                        and not port.get('segmentation_id') is None)\
-                        or network_type == 'flat':
+                if (network_type == 'vlan' and
+                        port.get('segmentation_id') is not None or
+                        network_type == 'flat'):
                     spec = builder.neutron_to_port_config_spec(port)
                     if not CONF.AGENT.dry_run:
                         specs.append(spec)
@@ -691,8 +693,8 @@ class VCenter(object):
     def _query_results_to_ports(results):
         ports = []
         for port_id, tenant_id, mac, status, admin_state_up, \
-                network_id, network_type, physical_network, segmentation_id, \
-                security_group_ids in results:
+            network_id, network_type, physical_network, segmentation_id, \
+            security_group_ids in results:
             ports.append({
                 'port_id': port_id,
                 'id': port_id,
@@ -727,16 +729,16 @@ class VCenter(object):
             NetworkSegment.physical_network,
             NetworkSegment.segmentation_id]
 
-        query = context.session.query(*columns).\
-                    add_column(string_agg(sgpb.security_group_id,
-                                          _DB_AGG_SEPARATOR,
-                                          sgpb.security_group_id)).\
-                 join(PortBindingLevel).\
-                 join(NetworkSegment).\
-                 join(sgpb).\
-                 filter(PortBindingLevel.host == self.agent.conf.host,
-                        PortBindingLevel.driver == constants.DVS,
-                        )
+        query = context.session.query(*columns). \
+            add_column(string_agg(sgpb.security_group_id,
+                                  _DB_AGG_SEPARATOR,
+                                  sgpb.security_group_id)). \
+            join(PortBindingLevel). \
+            join(NetworkSegment). \
+            join(sgpb). \
+            filter(PortBindingLevel.host == self.agent.conf.host,
+                   PortBindingLevel.driver == constants.DVS,
+                   )
 
         if constraint is not None:
             query = query.filter(constraint)
@@ -806,7 +808,8 @@ def main():
 
     for dvs in six.itervalues(util.uuid_dvs_map):
         port_keys = dvs._dvs.FetchDVPortKeys(criteria=builder.port_criteria())
-        ports = dvs._dvs.FetchDVPorts(criteria=builder.port_criteria(port_key=port_keys))
+        ports = dvs._dvs.FetchDVPorts(
+            criteria=builder.port_criteria(port_key=port_keys))
 
         configs = []
         for port in ports:
@@ -836,7 +839,8 @@ if __name__ == "__main__":
         resolution = float(os.getenv('DEBUG_BLOCKING'))
         import eventlet.debug
 
-        eventlet.debug.hub_blocking_detection(state=True, resolution=resolution)
+        eventlet.debug.hub_blocking_detection(state=True,
+                                              resolution=resolution)
     except (ValueError, TypeError):
         pass
     main()

@@ -31,18 +31,19 @@ VM_NETWORK_DEVICE_TYPES = [
     'VirtualE1000', 'VirtualE1000e', 'VirtualPCNet32',
     'VirtualSriovEthernetCard', 'VirtualVmxnet']
 
-CONCURRENT_MODIFICATION_TEXT = 'Cannot complete operation due to concurrent '\
+CONCURRENT_MODIFICATION_TEXT = 'Cannot complete operation due to concurrent ' \
                                'modification by another operation.'
 
-LOGIN_PROBLEM_TEXT = "Cannot complete login due to an incorrect "\
+LOGIN_PROBLEM_TEXT = "Cannot complete login due to an incorrect " \
                      "user name or password"
 
-DELETED_TEXT = "The object has already been deleted or has not been "\
+DELETED_TEXT = "The object has already been deleted or has not been " \
                "completely created"
 
 DUPLICATE_NAME = "oslo_vmware.exceptions.DuplicateName"
 
-BULK_FAULT_TEXT = "Cannot complete a vSphere Distributed Switch operation for one or more host members."
+BULK_FAULT_TEXT = "Cannot complete a vSphere Distributed Switch operation " \
+                  "for one or more host members."
 
 MIN_EPHEMERAL_PORT = 32768
 MAX_EPHEMERAL_PORT = 65535

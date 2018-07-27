@@ -1,8 +1,10 @@
-import os, six
 import logging
-from oslo_utils.importutils import try_import
+import os
+import six
+
 from pyVmomi import vim, vmodl
 
+from oslo_utils.importutils import try_import
 
 LOG = logging.getLogger(__name__)
 
@@ -17,8 +19,8 @@ def dict_merge(dct, merge_dct):
     :return: None
     """
     for k, v in six.iteritems(merge_dct):
-        if (k in dct and isinstance(dct[k], dict)
-                and isinstance(merge_dct[k], dict)):
+        if (k in dct and isinstance(dct[k], dict) and
+                isinstance(merge_dct[k], dict)):
             dict_merge(dct[k], merge_dct[k])
         else:
             dct[k] = merge_dct[k]
@@ -37,6 +39,7 @@ if not dogstatsd or os.getenv('STATSD_MOCK', False):
         def __call__(self, func):
             def wrapped(*args, **kwargs):
                 return func(*args, **kwargs)
+
             return wrapped
 
     class MockStats(object):
@@ -53,9 +56,10 @@ if not dogstatsd or os.getenv('STATSD_MOCK', False):
     stats = MockStats()
 else:
     stats = dogstatsd.DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
-                      port=int(os.getenv('STATSD_PORT', 9125)),
-                      namespace=os.getenv('STATSD_PREFIX', 'openstack')
-                      )
+                                port=int(os.getenv('STATSD_PORT', 9125)),
+                                namespace=os.getenv('STATSD_PREFIX',
+                                                    'openstack')
+                                )
 
 
 ##
@@ -92,10 +96,11 @@ def continue_retrieval(si, retrieve_result):
     if not token:
         return None
 
-    return si.content.propertyCollector.ContinueRetrievePropertiesEx(token=token)
+    return si.content.propertyCollector.ContinueRetrievePropertiesEx(
+        token=token)
 
 
-def build_selection_spec( name):
+def build_selection_spec(name):
     """Builds the selection spec.
     :param name: name for the selection spec
     :returns: selection spec
@@ -338,7 +343,8 @@ def get_object_properties(si, moref, properties_to_collect, skip_op_id=False):
         specSet=[property_filter_spec],
         options=options)
     if retrieve_result and retrieve_result.token:
-        si.content.propertyCollector.CancelRetrievePropertiesEx(retrieve_result.token)
+        si.content.propertyCollector.CancelRetrievePropertiesEx(
+            retrieve_result.token)
     return retrieve_result.objects
 
 
@@ -395,6 +401,7 @@ def get_object_properties_dict(si, moref, properties_to_collect):
                          'reason': m.faultCause.localizedMessage})
     return property_dict
 
+
 class WithRetrieval(object):
     def __init__(self, si, retrieve_result):
         super(WithRetrieval, self).__init__()
@@ -411,7 +418,9 @@ class WithRetrieval(object):
         while self.retrieve_result:
             for obj in self.retrieve_result.objects:
                 yield obj
-            self.retrieve_result = continue_retrieval(self.si, self.retrieve_result)
+            self.retrieve_result = continue_retrieval(self.si,
+                                                      self.retrieve_result)
+
 
 try:
     from attr.converters import optional as optional_attr

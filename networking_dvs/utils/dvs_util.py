@@ -16,21 +16,19 @@
 import atexit
 import hashlib
 import itertools
+import time
 import uuid
 from collections import defaultdict
 
 import attr
 import six
-import time
 from eventlet import sleep, spawn
 from oslo_concurrency.lockutils import lock
 from oslo_log import log
-from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
-from pyVim.connect import SmartConnect, SmartConnectNoSSL, Disconnect
+from pyVim.connect import Disconnect
 from pyVim.connect import SmartStubAdapter
 from pyVim.connect import VimSessionOrientedStub
-
 from pyVim.task import WaitForTask as wait_for_task
 from pyVmomi import vim, vmodl
 from requests.exceptions import ConnectionError
@@ -38,8 +36,9 @@ from requests.exceptions import ConnectionError
 from networking_dvs.common import config, util
 from networking_dvs.common import constants as dvs_const
 from networking_dvs.common import exceptions
-from networking_dvs.common.util import stats, optional_attr
+from networking_dvs.common.util import optional_attr, stats
 from networking_dvs.utils import spec_builder as builder
+from oslo_utils import timeutils
 
 try:
     from neutron._i18n import _
@@ -224,7 +223,7 @@ class DVSController(object):
         countdown = defaultdict(lambda: 5)
         suffix = '-' + dvportgroup_suffix(self.uuid)
         while not quit_event.ready():
-            for _ in six.moves.xrange(6):
+            for i in six.moves.xrange(6):
                 if quit_event.ready():
                     return
                 sleep(1)
@@ -419,8 +418,9 @@ class DVSController(object):
             if ignore_in_use:
                 LOG.info(_(
                     "Could not delete port-group %(name)s. "
-                    "Reason: %(message)s")
-                         % {'name': pg.name, 'message': e.message})
+                    "Reason: %(message)s") % {
+                    'name': pg.name,
+                    'message': e.message})
                 return False
             else:
                 raise exceptions.wrap_wmvare_vim_exception(e)
@@ -600,16 +600,16 @@ class DVSController(object):
                 if not existing_spec:
                     update_specs_by_key[spec.key] = spec
                 else:
-                    for attr in ['configVersion', 'description', 'name']:
-                        value = getattr(spec, attr, None)
-                        if not value is None and \
-                                value != getattr(existing_spec, attr, None):
-                            setattr(existing_spec, attr, value)
-                    for attr in ['blocked', 'filterPolicy', 'vlan']:
-                        value = getattr(spec.setting, attr)
-                        if not value.inherited is None:
-                            setattr(existing_spec.setting, attr,
-                                    getattr(spec.setting, attr))
+                    for v in ['configVersion', 'description', 'name']:
+                        value = getattr(spec, v, None)
+                        if value is not None and \
+                                value != getattr(existing_spec, v, None):
+                            setattr(existing_spec, v, value)
+                    for v in ['blocked', 'filterPolicy', 'vlan']:
+                        value = getattr(spec.setting, v)
+                        if value.inherited is not None:
+                            setattr(existing_spec.setting, v,
+                                    getattr(spec.setting, v))
 
         return callbacks, update_specs_by_key.values()
 
@@ -847,7 +847,8 @@ class DVSController(object):
 
     def rectify_for_fault(self, fault):
         """
-        Handles DvsOperationBulkFault by attempting to rectify the hosts' configuration with the switch
+        Handles DvsOperationBulkFault by attempting to rectify the hosts'
+        configuration with the switch
         """
         host_faults = getattr(fault, "hostFault", None)
         hosts = set()
@@ -862,7 +863,7 @@ class DVSController(object):
                     hosts.add(host_ref)
                 else:
                     LOG.debug(("Timeout for host {} is not reached yet,"
-                              " skipping.").format(host_ref))
+                               " skipping.").format(host_ref))
             else:
                 self.hosts_to_rectify[host_ref] = time.time()
                 hosts.add(host_ref)
@@ -901,7 +902,7 @@ class DVSController(object):
                         exceptions.VMWareDVSException) as e:
                     if dvs_const.CONCURRENT_MODIFICATION_TEXT in e.message:
                         LOG.info(_('Concurrent modification on '
-                                     'increase port group.'))
+                                   'increase port group.'))
                         continue
                     raise e
         return port_info
@@ -1061,7 +1062,7 @@ class DVSController(object):
             return self.get_portgroup_by_name(pg_name)
         except exceptions.PortGroupNotFound:
             LOG.debug(_('Network %s is not present in vcenter. '
-                          'Perform network creation' % pg_name))
+                        'Perform network creation' % pg_name))
             return self.create_network(network, segment)
 
     def _get_config_by_ref(self, ref):

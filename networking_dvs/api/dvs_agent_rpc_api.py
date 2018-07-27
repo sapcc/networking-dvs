@@ -12,12 +12,12 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-import oslo_messaging
-from neutron.common import rpc as n_rpc
-from neutron.common import topics
 from osprofiler.profiler import trace_cls
 
+import oslo_messaging
 from networking_dvs.common import constants as dvs_const
+from neutron.common import rpc as n_rpc
+from neutron.common import topics
 
 
 class ExtendAPI(object):
@@ -42,6 +42,7 @@ class ExtendAPI(object):
     def delete_port(self, context, current, original, segment):
         self.delete_port_postcommit(current, original, segment)
 
+
 @trace_cls("rpc")
 class DVSClientAPI(object):
     """Client side RPC interface definition."""
@@ -64,7 +65,8 @@ class DVSClientAPI(object):
 
     def _get_cctxt_direct(self, host):
         return self.client.prepare(version=self.ver,
-                    topic=self._get_security_group_topic(host=host))
+                                   topic=self._get_security_group_topic(
+                                       host=host))
 
     def create_network_cast(self, current, segment):
         return self._get_cctxt().cast(self.context, 'create_network',

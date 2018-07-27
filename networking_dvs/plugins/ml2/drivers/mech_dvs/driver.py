@@ -12,13 +12,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from neutron.agent import securitygroups_rpc
-
-from neutron.plugins.ml2.drivers import mech_agent
 from oslo_log import log
 
 from networking_dvs.api import dvs_agent_rpc_api
 from networking_dvs.common import constants as dvs_constants
+from neutron.agent import securitygroups_rpc
+from neutron.plugins.ml2.drivers import mech_agent
 
 try:
     from neutron._i18n import _
@@ -86,7 +85,8 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
         if not agent.get('admin_state_up', False) \
                 or not agent.get('alive', False) \
-                or agent['agent_type'].lower() != dvs_constants.AGENT_TYPE_DVS.lower():
+                or agent[
+            'agent_type'].lower() != dvs_constants.AGENT_TYPE_DVS.lower():
             return False
 
         agent_host = agent.get('host', None)
@@ -108,11 +108,12 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             return False
 
         if self.version == 2:
-            response = self.dvs_notifier.bind_port_call(port,
-                                                        [segment],
-                                                        context.network.current,
-                                                        context.host
-                                                        )
+            response = self.dvs_notifier.bind_port_call(
+                port,
+                [segment],
+                context.network.current,
+                context.host
+            )
             if response and 'bridge_name' in response:
                 bridge_name = response['bridge_name']
 
