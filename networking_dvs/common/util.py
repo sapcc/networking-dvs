@@ -27,23 +27,30 @@ def dict_merge(dct, merge_dct):
 dogstatsd = try_import('datadog.dogstatsd')
 
 if not dogstatsd or os.getenv('STATSD_MOCK', False):
-    from mock import Mock
-    stats = Mock()
-
     class WithDecorator(object):
         def __enter__(self):
             pass
+
         def __exit__(self, type, value, traceback):
             pass
+
         def __call__(self, func):
             def wrapped(*args, **kwargs):
                 return func(*args, **kwargs)
             return wrapped
 
-    def timed(*args, **kwargs):
+    class MockStats(object):
+        def timed(self, *args, **kwargs):
             return WithDecorator()
 
-    stats.timed = timed
+        def _mock(self, *args, **kwargs):
+            pass
+
+        gauge = _mock
+        timing = _mock
+        increment = _mock
+
+    stats = MockStats()
 else:
     stats = dogstatsd.DogStatsd(host=os.getenv('STATSD_HOST', 'localhost'),
                       port=int(os.getenv('STATSD_PORT', 9125)),

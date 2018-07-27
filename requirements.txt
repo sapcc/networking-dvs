@@ -18,5 +18,3 @@ pyvmomi                         # Apache-2.0
 
 datadog
 attrs                           # MIT License
-
-mock
