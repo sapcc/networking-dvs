@@ -16,6 +16,7 @@
 import atexit
 import hashlib
 import itertools
+import ssl
 import time
 import uuid
 from collections import defaultdict
@@ -1172,7 +1173,6 @@ def connect(conf):
     while not connection:
         try:
             if not conf.ca_certs:
-                import ssl
                 if hasattr(ssl, '_create_unverified_context'):
                     ssl_context = ssl._create_unverified_context()
                 else:
