@@ -51,9 +51,7 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         self.version = 1
 
         sg_enabled = securitygroups_rpc.is_firewall_enabled()
-        self.vif_details = {portbindings.CAP_PORT_FILTER: sg_enabled,
-                            portbindings.OVS_HYBRID_PLUG: sg_enabled,
-                            }
+        self.vif_details = {portbindings.CAP_PORT_FILTER: sg_enabled}
         self.context = context.get_admin_context_without_session()
         self.dvs_notifier = dvs_agent_rpc_api.DVSClientAPI(self.context)
         super(VMwareDVSMechanismDriver, self).__init__(
@@ -64,15 +62,16 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         LOG.info(_("VMware DVS mechanism driver initialized..."))
 
     def get_allowed_network_types(self, agent):
-        return ([neutron_constants.TYPE_VLAN, neutron_constants.TYPE_FLAT])
+        return [neutron_constants.TYPE_VLAN, neutron_constants.TYPE_FLAT]
 
     def get_mappings(self, agent):
         config = agent['configurations']
+
         if 'network_maps_v2' in config:
-            self.version = 2
+            self.version = int(config.get('agent_version', 2))
             return config['network_maps_v2']
         else:
-            self.version = 1
+            self.version = int(config.get('agent_version', 1))
             return config.get('network_maps', {'default': 'dvSwitch0'})
 
     def try_to_bind_segment_for_agent(self, context, segment, agent):
@@ -85,8 +84,8 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
 
         if not agent.get('admin_state_up', False) \
                 or not agent.get('alive', False) \
-                or agent[
-            'agent_type'].lower() != dvs_constants.AGENT_TYPE_DVS.lower():
+                or agent['agent_type'].lower() != \
+                dvs_constants.AGENT_TYPE_DVS.lower():
             return False
 
         agent_host = agent.get('host', None)
@@ -107,20 +106,22 @@ class VMwareDVSMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
         if not bridge_name:
             return False
 
-        if self.version == 2:
+        vif_details = self.vif_details.copy()
+        vif_details['bridge_name'] = bridge_name
+
+        if self.version > 1:
             response = self.dvs_notifier.bind_port_call(
                 port,
                 [segment],
                 context.network.current,
                 context.host
             )
-            if response and 'bridge_name' in response:
-                bridge_name = response['bridge_name']
+            if response:
+                if 'vif_details' in response:
+                    vif_details = response['vif_details']
+                elif 'bridge_name' in response:
+                    vif_details['bridge_name'] = response['bridge_name']
 
-        vif_details = self.vif_details.copy()
-        vif_details['bridge_name'] = bridge_name
+        context.set_binding(segment[api.ID], self.vif_type, vif_details)
 
-        context.set_binding(segment[api.ID],
-                            self.vif_type,
-                            vif_details)
         return True

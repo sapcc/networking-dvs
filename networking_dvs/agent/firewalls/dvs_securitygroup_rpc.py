@@ -137,7 +137,7 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
         if not pg:
             return None, None
 
-        network_id, sgs = self._pg_to_sgs.get(pg.name)
+        network_id, sgs = self._pg_to_sgs.get(pg.name, (None, None))
         if network_id and sgs:
             return network_id, sgs
 

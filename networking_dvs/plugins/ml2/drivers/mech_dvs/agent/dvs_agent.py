@@ -118,6 +118,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             'host': self.conf.host,
             'topic': n_const.L2_AGENT_TOPIC,
             'configurations': {
+                'agent_version': 2,
                 'network_maps': network_maps,
                 'network_maps_v2': network_maps,
             },
@@ -193,7 +194,14 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             LOG.warning('Failed to create port-group')
             return {}
 
-        return {'bridge_name': port_group.name}
+        return {
+            'bridge_name': port_group.name,
+            'vif_details': {
+                'dvs_port_group_name': port_group.name,
+                'dvs_port_group_key': port_group.key,
+                'dvs_uuid': dvs.uuid
+            }
+        }
 
     @staticmethod
     def mtu_update(dvs, network_current):
