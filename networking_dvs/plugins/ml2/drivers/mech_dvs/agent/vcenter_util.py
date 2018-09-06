@@ -326,9 +326,8 @@ class VCenterMonitor(object):
         last_port_desc = None
 
         for change in change_set:
-            port_desc = self._handle_virtual_machine_change(
-                change, vm_hw, vmobref)
-            if port_desc:
+            for port_desc in self._handle_virtual_machine_change(
+                    change, vm_hw, vmobref):
                 if id(last_port_desc) != id(port_desc):
                     self._handle_port_update(last_port_desc, now)
                     last_port_desc = port_desc
@@ -348,7 +347,7 @@ class VCenterMonitor(object):
                     port_desc = self._port_desc_from_nic_change(vmobref, v)
                     if port_desc:
                         vm_hw[port_desc.device_key] = port_desc
-                        return port_desc
+                        yield port_desc
             elif 'indirectRemove' == change.op:
                 self._handle_removal(vmobref)
         elif change_name.startswith('config.hardware.device['):
@@ -363,19 +362,19 @@ class VCenterMonitor(object):
                     attribute = change_name[id_end + 2:]
                     if 'connectable.connected' == attribute:
                         port_desc.connected = change_val
-                        return port_desc
+                        yield port_desc
                     elif 'connectable.status' == attribute:
                         port_desc.status = change_val
-                        return port_desc
+                        yield port_desc
                     elif 'macAddress' == attribute:
                         port_desc.mac_address = str(change_val)
-                        return port_desc
+                        yield port_desc
                     elif 'backing.port.connectionCookie' == attribute:
                         port_desc.connection_cookie = str(change_val)
-                        return port_desc
+                        yield port_desc
                     elif 'backing.port.portKey' == attribute:
                         port_desc.port_key = str(change_val)
-                        return port_desc
+                        yield port_desc
                     elif 'backing.port.portgroupKey' == attribute:
                         change_val = str(change_val)
                         pgh = port_desc.port_group_history
@@ -385,20 +384,20 @@ class VCenterMonitor(object):
                         port_desc.port_group_history = [
                             key for key in pgh if key != change_val]
                         port_desc.port_group_key = change_val
-                        return port_desc
+                        yield port_desc
                 else:
                     port_desc = self._port_desc_from_nic_change(vmobref,
                                                                 change_val)
                     if port_desc:
                         vm_hw[port_desc.device_key] = port_desc
-                        return port_desc
+                        yield port_desc
 
         elif change_name == 'runtime.powerState':
             # print("{}: {}".format(vm, change_val))
             vm_hw['power_state'] = change_val
             for port_desc in six.itervalues(vm_hw):
                 if isinstance(port_desc, _DVSPortMonitorDesc):
-                    return port_desc
+                    yield port_desc
         else:
             LOG.debug(change)
 
