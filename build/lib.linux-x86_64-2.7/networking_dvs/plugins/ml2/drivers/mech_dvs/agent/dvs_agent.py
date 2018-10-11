@@ -35,7 +35,7 @@ from oslo_utils import timeutils
 from osprofiler.profiler import trace_cls
 
 from neutron.agent import rpc as agent_rpc
-from neutron.agent import securitygroups_rpc as sg_rpc
+from neutron.api.rpc.handlers import securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config
 from neutron_lib.agent import topics
 from neutron.common import profiler
@@ -97,7 +97,7 @@ class DVSPluginApi(agent_rpc.PluginApi):
 # security group rpc calls to self.sg_agent
 
 @trace_cls("rpc", trace_private=True)
-class DvsNeutronAgent(securitygroups_rpc.SecurityGroupAgentRpcCallbackMixin,
+class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                       dvs_agent_rpc_api.ExtendAPI):
     target = oslo_messaging.Target(version='1.4')
 
@@ -245,7 +245,7 @@ class DvsNeutronAgent(securitygroups_rpc.SecurityGroupAgentRpcCallbackMixin,
 
     def setup_rpc(self):
         self.plugin_rpc = DVSPluginApi(topics.PLUGIN)
-        self.sg_plugin_rpc = securitygroups_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
+        self.sg_plugin_rpc = sg_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
 
         self.agent_id = 'dvs-agent-%s' % self.conf.host
 

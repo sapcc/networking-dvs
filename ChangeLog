@@ -1,0 +1,324 @@
+CHANGES
+=======
+
+* Handle more than one nic in config.hardware.device
+* Store switch and port-group-key in binding\_vif\_details
+* Fix: moving import ssl statement on the top of the file
+* Fix formatting and imports
+* Use older postgres for psycopg2<2.7
+* Remove mock requirement from normal code
+* Added checks for mitaka
+* Fix py27 on queens
+* Port changes from stable/mitaka-m3 and add mitaka compatability
+* fix dhcp provider rule for security group
+* Fixed pep8 issues in test\_security\_group\_utils.py; Added pep8 check support for the networking-dvs
+* Enable travis
+* Setuping tox for running unit tests
+* Removed commented method
+* Initial Unit tests for DVS security\_group\_utils
+* Queens DVS fixes;
+* Added \_\_weakref\_\_ to PortGroup object
+* Importing the correct path of the neutron constants module
+* DVS migration to queens; Module imports fixes; Behavioral changes
+* Imports failure fix for networking-dvs integration with stable/queens
+* Import moules fixes
+* Rework code to separate ml2 and security groups
+* -- change if statement
+* Update vcenter\_util.py (#31)
+* Reduce number of query by using string\_aggr
+* Reduce load on db on startup
+* Use defaultdict instead of groupby, vmodl.fault.ManagedObjectNotFound
+* Fix default port-group configuration to be open
+* Queueing wrong specs
+* If no rules are left, do not block port-group
+* Fix booking of port without security-groups
+* Report physical network, which cannot be associated with a switch
+* Port may (yet) not be known
+* Name of a portgroup may not be in the update
+* Make the number of initial ports configurable
+* Fix usage of engine\_facade.reader
+* Convert grouped port to list
+* Select default vlan over all ports current and future ones
+* Fix for reassignment of ports
+* Use moId instead of the soap object for countdown
+* Handle externally deleted portgroup better
+* Clean out unused portgroups
+* Sync port-groups incrementally
+* Lazily load defaultPortConfig
+* Fix default-vlan behaviour
+* Read original port data split up by port-group
+* Add project id to number of rules per port-group statistic
+* Fix log-output for manage-object references
+* Fixes for security-group reassignments
+* Fix port-group key for security-group change
+* Port may already be gone
+* Fixes to pyvmomi conversion, choose default vlan
+* Yield, when building many filter rules
+* Hide arguments, as they can become quite large
+* Get rules directly from db, less text in config
+* Switch to pyvmomi
+* Fetch defaultPortConfig asynchronously
+* Remove global variable, query port from db
+* Refactoring and moving the dvs read ports thread and neutron read ports threadfrom dvs\_agent scan\_ports to vcenter\_util
+* DONT USE
+* Trigerring one thread for the set of ports instead of thread per port; Passing VCenter object to the VCenterMonitor instead of creating new instance;
+* Optimizing reading the DVS ports
+* Flipped logic
+* neutron-dvs-agent-cli command for validating configuration between Neutron port config and the DVS port config (#29)
+* Call logout function
+* Remove misleading error log output
+* Code-style: Old python style exception
+* Handle more than 6 security-groups for a port
+* Cache mtu (#28)
+* Use git tags for versions
+* Change MTU if network MTU is bigger than the DVS MTU. Log warning. (#27)
+* Filter out unsupported protocols
+* Fixup to dropall rule
+* ip\_prefix may not be set
+* Added more protocols
+* Formatting
+* Consolidate ipv4 and ipv6 any address rules
+* dry\_run mode only to display the intended changes
+* Ensure prefixLength is set to '0'
+* Formatting
+* Pass right network segment to agent
+* Fix crash on rectify task
+* Fix yielding of rule without ip\_prefix
+* collapsed\_address may be None
+* Catch IndexError
+* Rules may not have an ip\_prefix
+* Add more trace-points, configurable number of ports per iteration
+* Provide a fall-back
+* Do non-strict parsing of netmasks
+* Collapse overlapping network in rules
+* Reduce elements in the config
+* Ports is more current than vcenter\_port
+* Avoid copying ports
+* Keep a metric of the number of rules per security-group
+* Use common connection for monitor and api calls
+* Pre-create port-group on bind and avoid updates if unchanged (#26)
+* Create a watchdog-file
+* More debug messages
+* Remove monkey-patches (moved to own oslo.vmware branch)
+* firewall\_start may not be set
+* Formatting of debug output (avoid newlines)
+* Fixup to 78180afcd14d7ac6e8bfdc100eaac1e0cafe5651
+* Track portgroup creation and update times
+* Track time of vm reassignment times and report them to statsd
+* Do not attempt to reassign already properly assigned ports
+* Don't process ports for reassignment on rules decrementing
+* Do not fail on missing ports in ports\_by\_key in \_bound\_ports
+* Get vm reassignments to existing portgroups out of the dvpg creation wait path
+* Use a greenthread per security group set for dvpg updates and deletes
+* Log vcenter monitor exceptions using oslo\_log
+* Less verbose logging of skipped ports
+* Set vlan on dvpgs, skipping port binding for matching vlans
+* Don't fail on property collector changes without values
+* Fire and forget rectify tasks
+* Try to rectify hosts' configuration on dvs bulk faults
+* Fix for port bindinging not being retriggered after sg set update on an instance
+* Log an error when max retries is reached for portgroup update, do not propagate
+* Retry dvportgroup updates on concurrent modification exceptions
+* Make get\_pg\_per\_sg\_attribute use \_get\_portgroups internally
+* Configure and use the existing dvpg when creation fails with a duplicate name
+* Use a random name during portgroup creation, update after tagging
+* Do not process ports without security groups in the firewall
+* Initialize wait\_pile when resetting state on agent startup
+* Remove wrap\_retry from firewall rule application
+* Remove wrap\_retry from create/update/remove dvportgroup ops
+* Remove wrap\_retry from bind\_ports as it only queues update specs
+* Use a green pile in setup\_security\_groups\_support when resetting agent state
+* Use a green pile in setup\_security\_groups\_support when resetting agent state
+* Allow port overrides, skip bound ports and report them as up to neutron
+* Do not bind ports with matching vlan, report them as up to neutron
+* Allow port-level overrides of all available port policies
+* Revert incomplete skipping of already-bound ports
+* Do not bind ports when their vlan matches their segmentation id
+* Do not bind ports when their vlan matches their segmentation id
+* Support attaching new interfaces to an instance
+* Handle removed VM devices in VCenterMonitor
+* Extract \_port\_desc\_from\_nic\_change in VCenterMonitor
+* Ignore portgroup deletion failures on startup, fixed a wrong key in the logging
+* Handle vcenter port updates caused by 'openstack server rebuild'
+* Copy vcenter port objects before merging onto them
+* Remove unnecessary call to \_merge\_port\_info\_from\_vcenter
+* Ignore dvpg deletion failures when there are ports in use
+* Remove timer
+* Ignore failures to delete ports
+* Use dvs' uuid as a suffix, update dvportgroup names on agent boot
+* Use the dvs uuid as a suffix when naming dvportgroup
+* Do not add the  dvs uuid to the hash when naming dvportgroups
+* Update existing portgroups' names to the current scheme on agent startup
+* Extract dvportgroup naming to a method, use the dvs' uuid as a prefix
+* Pass token for ContinueRetrievePropertiesEx as kwarg
+* Remove timer
+* Get dvpg updates out of the vm reassignment wait path
+* Request config.configVersion instead of config from the property collector
+* Fix agent crash on a port with no security group rules
+* Time the core firewall driver methods for profiling
+* Simplify eventlet's usage in the firewall
+* Use eventlet's GreenPile to queue and wait for dvportgroup update tasks
+* @wrap\_retry \_delete\_port\_group, create\_dvportgroup and update\_dvportgroup
+* Reassign vms throught the greenpool on the vcenter object if available
+* Rename \_apply\_changed\_sg\_attr to \_apply\_changed\_sg\_aggr
+* Don't chunk port filter updates on the firewall driver
+* Revert "Update dvpgs without blocking and wait for the tasks afterwards"
+* Update dvpgs without blocking and wait for the tasks afterwards
+* Log info instead of error when VM reassignment fails
+* Remove del
+* Don't fail on missing mac that's not in ports\_by\_mac
+* Append the dvs name to newly-created dvpgs instead of prepending it
+* Prefix the dvpg names with the dvs name. Use a hash if lenght is above 80
+* Allow vim exceptions during vm reassignment, log an error and continue
+* Do not allow traffic filtering overrides per port for new dvpgs
+* Messages in queue on reboot can refer to ports that the fw doesn't know about
+* Compatability for different versions of attrs
+* Specify attributes to hash
+* Use .\_\_class\_\_.\_\_name\_\_ when looking for the custom attribute on dvpgs
+* Release no-longer used sg\_aggr records, avoid memory leaks
+* Don't delete dvpgs if there are VMs on them, re-schedule for next pass
+* Simplify the fw driver, document that apply is a no-op for this implementation
+* Simplify ports\_by\_switch - avoid copying and don't keep track of queue times
+* Optimize storage in sg aggregates. Keep counts and rebuild the dicts on demand
+* Simplify \_process\_ports by removing redundancy. Comment out debug logs
+* Styling fix in sg\_utils.apply\_rules
+* Call the firewall synchronously when removing ports
+* Fix a counting bug that turned decrementing into noop for count>1
+* Documenting a performance-fixing hack
+* Discard pending port binding updates for obsolete ports
+* Reassign VMs to dvportgroups so that VMs match their security group sets
+* Store the vnic type (e1000, vmxnet, etc) in the port's description
+* Allow port level vlan overrides when creating dvportgroups
+* Implement rule tracking per security groups. Apply it on demand to dvportgroups
+* Reset firewall on startup, clear rules from used dvportgroups and drop empty ones
+* Implement update\_dvportgroup, use it for existing dvpgs, mapped to sg sets
+* Keep track of dvportgroups' keys and references at the same time
+* Create and tag dvportgroups per sg sets on demand
+* Implement create\_dvportgroup in dvs\_util
+* Return port config specs from get\_port\_rules\_per\_sg\_sets, WIP
+* Implement get\_pg\_per\_sg\_attribute in dvs\_util
+* Implement \_get\_rules\_per\_sg\_sets\_from\_port in security\_group\_utils
+* Move \_patch\_sg\_rules to security\_groups\_utils
+* Queue dvs updates in \_apply\_sg\_rules\_for\_port, tidy up code
+* Extract \_patch\_sg\_rules. Reduce indent in \_apply\_sg\_rules\_for\_port by inverting
+* Do not alter state in \_merge\_port\_info\_from\_vcenter, extract to a separate def
+* Extract \_merge\_port\_info\_from\_vcenter from \_process\_port\_filter
+* Set up a custom attribute to store security groups mappings
+* Fix agent crash when updating security groups on an existing instance
+* Add support for ML2 flat networks
+* Process property collector updates to a nic's backing connectionCookie and portKey
+* Enable the mocked stats.timed to be used as a decorator
+* Allow DogStatsd to be mocked for local development
+* Allow certificate validation
+* Fix up metric name for update\_device\_list
+* Keep track of security-group update timing
+* Track the number of queued changes
+* Track latency of binding a port of new instances
+* Be more lax on the ingress port-range
+* Minor cleanups in timestamp handling
+* Replace "any" protocol with tcp/udp/icmp, as we cannot determine the flow of any protocol
+* Do not stop reporting, when there is an unhandled exception
+* NetworkMap can now map physical net to portgroup
+* Report bridge name in vif\_details
+* Match segment by configuration in network\_maps of agent
+* Report network mapping of agent
+* Match bound host and agent host
+* Option for restricting the agent to a cluster
+* CCM-244: Terminate agent on uncaught exception
+* Reorder suds-patch for a potential later release
+* Synchronised config options with Mirantis/vmware-dvs
+* Use attrs for lightweight objects
+* The spec field is named configVersion not version
+* More monkey patches
+* Trust succeeded configuration change
+* Monkey patch suds library for eventlet compatability
+* Fix import
+* Monkey patch parsing to yield to another greenthread
+* No need to split up at dvs\_firewall level anymore
+* Increase reporting intervall
+* Add the updated ports to the ports to bind
+* Fix error on early termination
+* Combine vlan and security group bindings, split if too large
+* Ignore .orig files
+* Remove ports without correspondance in neturon early
+* Hide latency of apis by parallelisation
+* Added optional blocking operation detection
+* Instead of using a seperate process, use eventlet
+* Reactivate deferred security group updates
+* Use greenlet pool to move out some task out of the processing loop
+* Log with standard logging, use eventlet
+* Track time of various API calls
+* Move cookie check into DVSController.update\_ports\_checked
+* Fix potential concurrency issues in queuing new ports
+* Removed some logging
+* Allow macAddress property to come up later
+* Use smaller chunks to make keep deadlines
+* Limit the number of ports to process
+* Catch ManagedObjectNotFoundException when waiting for task
+* Log the port on which the mismatch happened
+* security\_group\_rules may also not be set in a port
+* Close the queue and try to drain it to avoid a deadlock
+* Be more forcefull about ending the child-process
+* port['id'] may not exist
+* Do not block on queue, if terminating
+* Stop thread and connection on unhandled exceptions
+* Missed to initialise slot
+* Fix to getting attributes, when their missing in discovery
+* Attempt at workaround for duplicate traffic-filter
+* Use slots in DVSPortDesc
+* Lets not defer the refresh as we currently have nothing handling the deferred update
+* Fix formatting and attribution
+* Added Apache License and minor explanations
+* Remove outdated recovery process (fixed by hotpatch)
+* Reduce noise caused by HTTPS warnings
+* Increase the stored config version after successfully updating the rules
+* Move cookie check to port update routine
+* Less debugging output
+* Restart monitoring process, if it has been terminated
+* Add some guards against edge cases with non openstack VMs
+* Avoid error case when openstack DVS is not the only DVS
+* Re-added recovery process and enable it
+* Removed now superfluous recovery task
+* Hopefully fixed the issues by using different defaults for a port group
+* Switch to seperate process for monitoring ports
+* Replace hasattr with getattr
+* Check if ports have changed owner when configuring firewall
+* Switch dvs\_firewall to use vcenter\_util
+* Notify neutron about ports being already in configured state, fix iteration over new ports
+* Keep track of configVersion of port
+* Use the vmware-dvs controller
+* Adopt spec-builder pattern vmware-dvs
+* Update ports asynchronously
+* sg\_rules may be None
+* Follow changes in Mirantis/vmware-dvs
+* Increase batch size
+* Enable enhanced\_rpc for security groups
+* Break security group request/update down in more managable chunks
+* Filter ports with missing attributes in discovered port list
+* Python 3 compatability
+* Batch the deletion of the security groups
+* Fix ports being down
+* Use single api session object in agent
+* Use PropertyCollector over Instances intead of polling the ports
+* Reorder lookup from dvs->port to port->dvs
+* Cleanup of old files and additonal gitignores
+* Prefix only internally used member methods with underline, remove old code
+* Be more specific about the exceptions cought, and the logging levels used
+* Catch RPC communication failure
+* Fix rule serialisation by monkey-patching suds-jurko 0.6
+* Make wsdl\_loc configurable, but optional
+* Extract port key and store it locally, if it is not in the database
+* Keep more data from the update/scan calls, so we might to more informed decisions in the agent loop
+* Switched to common/constants
+* Import common config
+* Moved entry-point to dvs\_agent
+* Added files from mirantis driver
+* Close session at exit
+* Remove unused import
+* Remove polling manager and ovs client monitor
+* Re-indented file
+* Fix indentation error
+* Disable firewall and change ini to sample to avoid overwriting
+* Exclude idea workspace from repository
+* Liberty RDO compatibility
+* initial commit
