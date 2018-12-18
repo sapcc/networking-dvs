@@ -197,9 +197,15 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         return {
             'bridge_name': port_group.name,
             'vif_details': {
+                # Those keys are compatible with networking-vsphere
+                # And have the corresponding upstream change
+                'dvs_id': dvs.uuid,
+                'pg_id':  port_group.key,
+                # Those are legacy keys and can removed,
+                # if nova has been rolled out with sapcc/nova#66
                 'dvs_port_group_name': port_group.name,
                 'dvs_port_group_key': port_group.key,
-                'dvs_uuid': dvs.uuid
+                'dvs_uuid': dvs.uuid,
             }
         }
 
