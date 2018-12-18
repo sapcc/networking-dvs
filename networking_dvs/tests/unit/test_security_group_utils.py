@@ -312,7 +312,7 @@ class SecurityGroupUtilsTest(testtools.TestCase):
         """Deleting 'security_groups' property to simulate returning None"""
         del fake_port['security_groups']
         result = sg_utils.security_group_set(fake_port)
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
 
     def test__consolidate_rules_success(self):
         fake_rule = self._get_fake_rule(protocol="udp",
