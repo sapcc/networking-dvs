@@ -403,15 +403,15 @@ def security_group_set(port):
     A security group set is a comma-separated,
     sorted list of security group ids
     """
-    security_groups = port.get('security_groups')
-    if not security_groups:
-        LOG.warning("No security groups for port %s", port['id'])
-        return None
-
     network_id = port.get('network_id')
+
     if not network_id:
         LOG.warning("No network for port %s", port['id'])
         return None
+
+    security_groups = port.get('security_groups')
+    if not security_groups :
+        return network_id
 
     # There are 36 chars to a uuid, and in the description fits 255 chars
     # The first 37 chars will be used for the network id, though
