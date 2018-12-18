@@ -410,7 +410,7 @@ def security_group_set(port):
         return None
 
     security_groups = port.get('security_groups')
-    if not security_groups :
+    if not security_groups:
         return network_id
 
     # There are 36 chars to a uuid, and in the description fits 255 chars

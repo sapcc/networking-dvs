@@ -200,7 +200,7 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                 # Those keys are compatible with networking-vsphere
                 # And have the corresponding upstream change
                 'dvs_id': dvs.uuid,
-                'pg_id':  port_group.key,
+                'pg_id': port_group.key,
                 # Those are legacy keys and can removed,
                 # if nova has been rolled out with sapcc/nova#66
                 'dvs_port_group_name': port_group.name,
