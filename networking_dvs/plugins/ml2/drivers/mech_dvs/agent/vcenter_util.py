@@ -706,7 +706,8 @@ class VCenter(object):
                 'network_type': network_type,
                 'segmentation_id': segmentation_id,
                 'physical_network': physical_network,
-                'security_groups': security_group_ids.split(_DB_AGG_SEPARATOR),
+                'security_groups': security_group_ids.split(_DB_AGG_SEPARATOR)
+                if security_group_ids else [],
                 'task': None,
             })
 
@@ -734,7 +735,7 @@ class VCenter(object):
                                   sgpb.security_group_id)). \
             join(PortBindingLevel). \
             join(NetworkSegment). \
-            join(sgpb). \
+            outerjoin(sgpb). \
             filter(PortBindingLevel.host == self.agent.conf.host,
                    PortBindingLevel.driver == constants.DVS,
                    )
