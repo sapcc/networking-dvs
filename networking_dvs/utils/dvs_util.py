@@ -216,7 +216,7 @@ class DVSController(object):
             spawn(self._background_task, quit_event)
 
     def _background_task(self, quit_event):
-        countdown = defaultdict(lambda: 5)
+        countdown = defaultdict(lambda: 20)
         suffix = '-' + dvportgroup_suffix(self.uuid)
         while not quit_event.ready():
             for _ in six.moves.xrange(6):
