@@ -75,6 +75,10 @@ dvs_opts = [
                default=2,
                help=_("Number of ports a newly "
                       "created port-group should have")),
+    cfg.IntOpt('portgroup_retention_iterations',
+               default=20,
+               help=_("Number of iterations a 6 seconds an empty portgroup is"
+                      " kept before deleting it.")),
 ]
 
 cfg.CONF.register_opts(dvs_opts, "DVS")
