@@ -437,7 +437,7 @@ class VCenterMonitor(object):
                 mac_address, (None, None, None))
             self.untried_ports.pop(mac_address, None)
             if then:
-                LOG.debug("Port {} {} {} was down for {} ({})".format(
+                LOG.debug("Port {} {} was down for {} ({})".format(
                     mac_address, port_desc.port_key,
                     (now - then).total_seconds(),
                     (self.iteration - iteration)))
