@@ -83,12 +83,13 @@ def _record_timing(_, oldest, tags):
 
 class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
     def __init__(self, context=None, plugin_rpc=None,
-                 v_center=None, config=None):
+                 v_center=None, config=None, pool=None):
         super(DVSSecurityGroupRpc, self).__init__()
         self.context = context or neutron_context.get_admin_context()
         self.plugin_rpc = plugin_rpc
         self.v_center = v_center
         self.config = config
+        self.pool = pool
         self._security_groups = dict()  # id -> SecurityGroup
         self._pg_to_sgs = dict()
         self._to_refresh = dict()
@@ -337,7 +338,8 @@ class DVSSecurityGroupRpc(SecurityGroupServerRpcMixin):
                     sg_tags.append('project_id:' + project_id),
 
                 old_task = port_group.task
-                new_task = eventlet.spawn(dvs.update_dvportgroup,
+                new_task = self.pool.spawn(dvs.update_dvportgroup,
+                #new_task = eventlet.spawn(dvs.update_dvportgroup,
                                           port_group,
                                           port_config,
                                           sync=old_task)

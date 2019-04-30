@@ -147,7 +147,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             self.sg_agent = dvs_rpc.DVSSecurityGroupRpc(self.context,
                                                         self.sg_plugin_rpc,
                                                         self.api,
-                                                        self.conf)
+                                                        self.conf,
+                                                        self.pool)
         self.run_daemon_loop = True
         self.iter_num = 0
 
