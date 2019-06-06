@@ -79,6 +79,10 @@ dvs_opts = [
                default=20,
                help=_("Number of iterations a 6 seconds an empty portgroup is"
                       " kept before deleting it.")),
+    cfg.IntOpt('vcenter_task_pool_size',
+               default=10,
+               help=_("Size of the shared GreenPool for parallel change "
+                      "operations / tasks against the vCenter.")),
 ]
 
 cfg.CONF.register_opts(dvs_opts, "DVS")

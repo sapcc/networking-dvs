@@ -105,7 +105,8 @@ class DvsNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         super(DvsNeutronAgent, self).__init__()
 
         # Start small, so we identify possible bottlenecks
-        self.pool = eventlet.greenpool.GreenPool(size=10)
+        pool_size = CONF.DVS.vcenter_task_pool_size
+        self.pool = eventlet.greenpool.GreenPool(size=pool_size)
         self.conf = conf or CONF
         self.context = neutron_context.get_admin_context()
 
