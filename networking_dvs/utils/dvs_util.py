@@ -833,8 +833,8 @@ class DVSController(object):
                 return
             except vim.fault.DvsOperationBulkFault as e:
                 self.rectify_for_fault(e)
-            except vim.fault.ConcurrentAccess:
-                if ntry >= retries:
+            except vim.fault.ConcurrentAccess as e:
+                if ntry + 1 >= retries:
                     raise exceptions.wrap_wmvare_vim_exception(e)
                 LOG.debug("Concurrent modification detected, will retry.")
                 props = util.get_object_properties_dict(
@@ -914,7 +914,8 @@ class DVSController(object):
             if not net_name:
                 net_name = self._get_net_name(self.dvs_name, network)
             pg = self._get_or_create_pg(net_name, network, segment)
-            for iter in range(0, 4):
+            retries = 4
+            for ntry in range(retries):
                 try:
                     port_info = self._lookup_unbound_port_or_increase_pg(pg)
 
@@ -928,8 +929,9 @@ class DVSController(object):
                     wait_for_task(update_task, si=self.connection)
                     return port_info.key
                 except vim.fault.VimFault as e:
+                    if ntry + 1 >= retries:
+                        raise exceptions.wrap_wmvare_vim_exception(e)
                     sleep(0.1)
-            raise exceptions.wrap_wmvare_vim_exception(e)
         except vim.fault.VimFault as e:
             raise exceptions.wrap_wmvare_vim_exception(e)
 
